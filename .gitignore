@@ -1,0 +1,87 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments (Python in-project venv has Lib/, Scripts/, Include/, pyvenv.cfg)
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+Lib/
+Lib64/
+Scripts/
+Scripts/
+Include/
+share/
+pyvenv.cfg
+pip-selfcheck.json
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+.cache
+htmlcov/
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Vector store / index data (large binary blobs that can be rebuilt)
+data/vector_store/
+
+# Logs
+*.log
+logs_*.txt
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build / dist
+*.tar.gz
+*.zip
+
+# Temporary debug / scratch files (named with leading underscore)
+_*.py
+_*.out
+_*.json
+_*.txt
+_*.log
+
+# Demo / API key scripts (should never be committed)
+demoapikey.py
+*apikey*.py

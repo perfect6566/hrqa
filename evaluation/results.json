@@ -1,0 +1,93 @@
+"""
+Sample evaluation results for HR Policy Assistant.
+Run `python -m evaluation.run_evaluation` to generate actual results.
+"""
+
+{
+    "note": "This is a sample results file. Run evaluation/run_evaluation.py to generate actual results.",
+    "summary": {
+        "total_questions": 20,
+        "passed_questions": 17,
+        "pass_rate": "85.0%",
+        "evaluated_at": "2026-08-05",
+        "seed_used": 42
+    },
+    "answer_quality": {
+        "groundedness_avg": "85.0%",
+        "groundedness_details": {
+            "policy_qa": "90.0%",
+            "employee_data": "95.0%",
+            "workflow": "80.0%",
+            "out_of_scope": "N/A"
+        },
+        "citation_accuracy_avg": "88.0%",
+        "citation_details": {
+            "with_citations": 18,
+            "without_citations": 2,
+            "correct_sources": 17
+        }
+    },
+    "agent_behavior": {
+        "tool_selection_accuracy": "90.0%",
+        "tool_selection_details": {
+            "correct_tools_selected": 18,
+            "incorrect_tools": 2,
+            "missing_tools": 1
+        },
+        "workflow_completion_rate": "85.0%",
+        "workflow_completion_details": {
+            "pto_request": "90.0%",
+            "remote_work_eligibility": "85.0%",
+            "benefits_question": "80.0%"
+        },
+        "escalation_accuracy": "92.0%",
+        "action_safety_rate": "100.0%"
+    },
+    "performance": {
+        "latency_p50_ms": 2500,
+        "latency_p95_ms": 5500,
+        "cold_start_ms": 15000,
+        "warm_start_ms": 2500,
+        "notes": "Latency varies based on API provider (DeepSeek) response times"
+    },
+    "mcp_integration": {
+        "protocol_used": true,
+        "tools_called_via_mcp": true,
+        "tools_count": 8,
+        "rag_tools_connected": true
+    },
+    "ablation_studies": {
+        "chunk_size_comparison": {
+            "256": {"groundedness": "78%"},
+            "512": {"groundedness": "85%"},
+            "1024": {"groundedness": "82%"}
+        },
+        "retrieval_k_comparison": {
+            "k_3": {"groundedness": "80%"},
+            "k_5": {"groundedness": "85%"},
+            "k_10": {"groundedness": "83%"}
+        }
+    },
+    "detailed_results": [
+        {"id": "eval_01", "category": "policy_qa", "groundedness": 0.95, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_02", "category": "policy_qa", "groundedness": 0.90, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_03", "category": "policy_qa", "groundedness": 0.85, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_04", "category": "policy_qa", "groundedness": 0.88, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_05", "category": "policy_qa", "groundedness": 0.82, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_06", "category": "employee_data", "groundedness": 0.95, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_07", "category": "employee_data", "groundedness": 0.95, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_08", "category": "employee_data", "groundedness": 0.92, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_09", "category": "employee_data", "groundedness": 0.98, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_10", "category": "employee_data", "groundedness": 0.95, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_11", "category": "multi_doc", "groundedness": 0.80, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_12", "category": "multi_doc", "groundedness": 0.75, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_13", "category": "workflow", "groundedness": 0.85, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_14", "category": "workflow", "groundedness": 0.80, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_15", "category": "ambiguous", "groundedness": 0.70, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_16", "category": "out_of_scope", "groundedness": 1.0, "citations": 0, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_17", "category": "out_of_scope", "groundedness": 1.0, "citations": 0, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_18", "category": "workflow", "groundedness": 0.78, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_19", "category": "policy_qa", "groundedness": 0.85, "citations": 1, "tool_correct": true, "workflow_complete": true},
+        {"id": "eval_20", "category": "policy_qa", "groundedness": 0.88, "citations": 1, "tool_correct": true, "workflow_complete": true}
+    ]
+}

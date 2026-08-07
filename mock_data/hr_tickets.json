@@ -1,0 +1,100 @@
+{
+  "hr_tickets": [
+    {
+      "ticket_id": "HR001",
+      "employee_id": "EMP002",
+      "category": "remote_work",
+      "subject": "International remote work request - Portugal",
+      "description": "Request to work remotely from Portugal for 3 weeks in October",
+      "status": "pending",
+      "created_date": "2026-08-01",
+      "updated_date": "2026-08-01",
+      "assigned_to": "EMP003",
+      "resolution": null
+    },
+    {
+      "ticket_id": "HR002",
+      "employee_id": "EMP004",
+      "category": "benefits",
+      "subject": "Question about HSA eligibility",
+      "description": "Asking if they can enroll in HSA given current enrollment",
+      "status": "resolved",
+      "created_date": "2026-07-15",
+      "updated_date": "2026-07-17",
+      "assigned_to": "EMP003",
+      "resolution": "Explained that HDHP plan is required for HSA. Employee is on PPO, so not eligible. Can change during open enrollment."
+    },
+    {
+      "ticket_id": "HR003",
+      "employee_id": "EMP005",
+      "category": "leave",
+      "subject": "Parental leave inquiry",
+      "description": "Asking about parental leave policies and eligibility",
+      "status": "resolved",
+      "created_date": "2026-07-20",
+      "updated_date": "2026-07-22",
+      "assigned_to": "EMP003",
+      "resolution": "Confirmed eligibility for 8 weeks paid parental leave as non-birth parent. Must provide 30 days notice."
+    },
+    {
+      "ticket_id": "HR004",
+      "employee_id": "EMP006",
+      "category": "expense",
+      "subject": "Home office setup reimbursement",
+      "description": "Requesting reimbursement for desk and chair purchase",
+      "status": "approved",
+      "created_date": "2026-07-25",
+      "updated_date": "2026-07-28",
+      "assigned_to": "EMP003",
+      "resolution": "Approved $450 for home office setup."
+    },
+    {
+      "ticket_id": "HR005",
+      "employee_id": "EMP001",
+      "category": "pto",
+      "subject": "PTO carryover question",
+      "description": "Clarification on carryover policy for unused PTO",
+      "status": "resolved",
+      "created_date": "2026-08-02",
+      "updated_date": "2026-08-03",
+      "assigned_to": "EMP003",
+      "resolution": "Confirmed 5-day carryover limit. Employee has 2 carryover days remaining from previous year."
+    },
+    {
+      "ticket_id": "HR006",
+      "employee_id": "EMP008",
+      "category": "workplace",
+      "subject": "Workplace concern",
+      "description": "Reported concern about team communication",
+      "status": "in_progress",
+      "created_date": "2026-08-04",
+      "updated_date": "2026-08-05",
+      "assigned_to": "EMP003",
+      "resolution": null
+    },
+    {
+      "ticket_id": "HR007",
+      "employee_id": "EMP009",
+      "category": "remote_work",
+      "subject": "Remote work eligibility review",
+      "description": "Annual review of remote work arrangement",
+      "status": "resolved",
+      "created_date": "2026-07-01",
+      "updated_date": "2026-07-10",
+      "assigned_to": "EMP003",
+      "resolution": "Confirmed continued eligibility for full remote work. Performance meets all requirements."
+    },
+    {
+      "ticket_id": "HR008",
+      "employee_id": "EMP007",
+      "category": "benefits",
+      "subject": "Adding spouse to medical plan",
+      "description": "Recently married, needs to add spouse to coverage",
+      "status": "approved",
+      "created_date": "2026-07-30",
+      "updated_date": "2026-08-01",
+      "assigned_to": "EMP003",
+      "resolution": "Processed change from employee_only to employee_plus_spouse. New deduction: $350/month."
+    }
+  ]
+}
