@@ -192,7 +192,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Deploy to Render
-        uses: render-deploy-action@v1
+        uses: JorgeLNJunior/render-deploy@v1.5.0
         with:
-          api-key: ${{ secrets.RENDER_API_KEY }}
-          service-id: ${{ secrets.RENDER_SERVICE_ID }}
+          api_key: ${{ secrets.RENDER_API_KEY }}
+          service_id: ${{ secrets.RENDER_SERVICE_ID }}
+          wait_deploy: true
