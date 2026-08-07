@@ -189,10 +189,65 @@ python -m evaluation.run_evaluation
 
 ### Render (Free Tier)
 
-1. Connect GitHub repository
-2. Set build command: `pip install -r requirements.txt`
-3. Set start command: `python -m src.api.main`
-4. Add environment variable: `OPENAI_API_KEY`
+The repository ships with a `render.yaml` blueprint, so Render will pick up the
+exact configuration below when you connect the repo. The blueprint treats the
+web app, agent orchestrator, MCP server, and local FAISS vector store as a
+single free-tier Web Service (matching the architecture document's "single
+Render web service" recommendation).
+
+#### Render Dashboard Settings
+
+| Field | Value |
+| --- | --- |
+| **Branch** | `master` |
+| **Root Directory** | `.` (project root) |
+| **Build Command** | `./build.sh` |
+| **Start Command** | `python -m src.api.main` |
+| **Instance Type** | Free |
+
+#### Required Environment Variables
+
+Set these in the Render dashboard under **Environment → Environment Variables**
+(or override `OPENAI_BASE_URL` if you use a non-OpenAI provider):
+
+| Key | Required | Example / Default |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | ✅ | `sk-...` (your provider key) |
+| `OPENAI_BASE_URL` | optional | `https://api.deepseek.com/v1` (defaults to OpenAI) |
+| `OPENAI_MODEL` | optional | `deepseek-chat` |
+| `POLICIES_DIR` | optional | `policies` |
+| `VECTOR_STORE_PATH` | optional | `./data/vector_store` |
+| `EMBEDDING_MODEL` | optional | `all-MiniLM-L6-v2` |
+| `APP_HOST` | optional | `0.0.0.0` |
+| `MCP_PORT` | optional | `8001` (internal subprocess only) |
+| `PYTHON_VERSION` | optional | `3.11.10` (set via `runtime.txt`) |
+| `PYTHONUNBUFFERED` | optional | `1` |
+| `HF_HUB_DISABLE_SYMLINKS_PREVENTION` | optional | `1` |
+
+The `render.yaml` already declares every variable except `OPENAI_API_KEY`,
+which is marked `sync: false` so you must set it manually.
+
+#### One-Click Deploy via Blueprint
+
+1. Push the repo to GitHub on the `master` branch.
+2. In Render, click **New → Blueprint**, point at the repo, and accept the
+   plan. Render will:
+   - detect `render.yaml`,
+   - create the `hrqa-web` Web Service,
+   - run `./build.sh` (installs deps and pre-builds the FAISS index),
+   - start the app with `python -m src.api.main`.
+3. In the service's **Environment** tab, paste your `OPENAI_API_KEY`
+   (and optionally `OPENAI_BASE_URL`).
+4. Wait for the first deploy to finish. The service exposes the chat UI and
+   `/chat`, `/health`, `/capabilities`, and `/demo/*` endpoints under the
+   automatic `*.onrender.com` URL.
+
+#### Cold-Start Behavior
+
+Render's free tier spins the service down after ~15 minutes of inactivity.
+The first request after a spin-down takes 30–60 seconds. The build script
+pre-builds the RAG index so the cold-start is mostly just the FastAPI/Uvicorn
+boot and the pipeline warm-up.
 
 ### Railway
 

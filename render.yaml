@@ -1,0 +1,51 @@
+services:
+  # ---------------------------------------------------------------------------
+  # Single Web Service — hosts the FastAPI web app, the agent orchestrator,
+  # the local MCP server (started as a subprocess on port 8001), and the local
+  # FAISS vector store. This matches the "single-service deployment" pattern
+  # recommended for free-tier hosts in the project architecture document.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: hrqa-web
+    runtime: python
+    plan: free
+    branch: master
+    rootDir: .
+    buildCommand: "./build.sh"
+    startCommand: "python -m src.api.main"
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONIOENCODING
+        value: utf-8
+      - key: HF_HUB_DISABLE_SYMLINKS_PREVENTION
+        value: "1"
+      # --- LLM provider (REQUIRED) ------------------------------------------
+      - key: OPENAI_API_KEY
+        sync: false                  # set manually in the Render dashboard
+      # OPENAI_BASE_URL can stay unset (defaults to OpenAI). For DeepSeek,
+      # OpenRouter, Groq, etc. set it to the provider's OpenAI-compatible URL.
+      - key: OPENAI_BASE_URL
+        value: ""
+      - key: OPENAI_MODEL
+        value: deepseek-chat
+      # --- RAG configuration -----------------------------------------------
+      - key: POLICIES_DIR
+        value: policies
+      - key: VECTOR_STORE_PATH
+        value: ./data/vector_store
+      - key: EMBEDDING_MODEL
+        value: all-MiniLM-L6-v2
+      # --- App / MCP ports -------------------------------------------------
+      # Render exposes only the $PORT env var to the web service; the MCP
+      # subprocess runs on 127.0.0.1:$MCP_PORT and is not externally exposed.
+      - key: APP_HOST
+        value: 0.0.0.0
+      - key: MCP_PORT
+        value: "8001"
+      - key: MCP_HOST
+        value: 127.0.0.1

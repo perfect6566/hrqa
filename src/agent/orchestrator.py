@@ -487,11 +487,17 @@ class AgentOrchestrator:
             "latency_ms": int((time.time() - synth_started) * 1000),
         })
 
-        # Add source summary to answer if sources were referenced
+        # Add source summary to answer if sources were referenced.
+        # The LLM may emit the citation in a few variants — pick all of them up
+        # so citations chip and References footer stay in sync with the answer.
+        import re as _re
+        _src_marker_re = _re.compile(r"\[Source\s+(\d+)")
         sources_in_answer = set()
-        for i in range(1, len(retrieved_chunks) + 1):
-            if f"[Source {i}]" in final_answer:
-                sources_in_answer.add(i)
+        for match in _src_marker_re.finditer(final_answer):
+            try:
+                sources_in_answer.add(int(match.group(1)))
+            except (TypeError, ValueError):
+                continue
 
         if sources_in_answer:
             # Build source mapping with section info
