@@ -155,8 +155,11 @@ jobs:
           from fastapi.testclient import TestClient
           app = create_app()
           assert app is not None, 'MCP app not created'
-          print('MCP app created successfully')
-          client = TestClient(app)
+          # FastMCP 3.x: the FastMCP instance is no longer directly
+          # ASGI-callable; expose its Starlette app via .http_app().
+          asgi_app = app.http_app()
+          print('MCP ASGI app created successfully')
+          client = TestClient(asgi_app)
 
           response = client.get('/health')
           assert response.status_code == 200, 'Health check failed'
