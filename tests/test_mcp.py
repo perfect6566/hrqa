@@ -6,12 +6,31 @@ import pytest
 class TestMCPToolsIntegration:
     """Test MCP tools integration."""
 
-    def test_all_tools_registered(self):
+    @pytest.mark.asyncio
+    async def test_all_tools_registered(self):
         """Test that all required tools are registered."""
-        from src.mcp_server.app import mcp_server
+        from src.mcp_server.app import create_app
 
-        tools = mcp_server.list_tools()
-        tool_names = [t["name"] for t in tools]
+        # ``create_app`` returns the FastMCP instance with all tools
+        # registered. Previously the test imported a non-existent
+        # ``mcp_server`` symbol — the module exposes a factory
+        # (``create_app`` / ``get_mcp_server``) instead.
+        mcp_server = create_app()
+        # ``FastMCP.list_tools`` is async; with ``asyncio_mode = "auto"``
+        # in pyproject.toml, this test is automatically wrapped and run
+        # by pytest-asyncio. Calling ``get_event_loop().run_until_complete``
+        # from inside a sync test would deadlock, so we await directly.
+        tools = await mcp_server.list_tools()
+
+        # FastMCP 3.x returns ``FunctionTool`` Pydantic models that
+        # expose the tool name as ``.name`` — but tolerate a plain dict
+        # shape too so the test is robust against upstream churn.
+        tool_names = []
+        for t in tools:
+            if isinstance(t, dict):
+                tool_names.append(t.get("name"))
+            else:
+                tool_names.append(getattr(t, "name", None))
 
         required_tools = [
             "lookup_employee_profile",
@@ -24,8 +43,8 @@ class TestMCPToolsIntegration:
             "get_policy_section",
         ]
 
-        for tool in required_tools:
-            assert tool in tool_names, f"Missing tool: {tool}"
+        missing = [t for t in required_tools if t not in tool_names]
+        assert not missing, f"Missing MCP tools: {missing} (got {tool_names})"
 
     def test_tool_call_workflow(self):
         """Test a complete tool call workflow."""

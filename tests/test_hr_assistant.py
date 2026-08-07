@@ -65,19 +65,23 @@ class TestPTOBalanceTool:
         assert result["used_days"] == 5
 
     def test_emp005_pto(self, hr_tools):
-        """EMP005 should have 3 available days (15 accrued - 7 used - 5 pending = 3)."""
+        """EMP005: 0 available days (12 accrued - 7 used - 5 pending) per mock data."""
         result = hr_tools.check_pto_balance(employee_id="EMP005")
 
         assert result["success"] is True
-        assert result["available_days"] == 3
+        assert result["available_days"] == 0
+        assert result["accrued_days"] == 12
+        assert result["used_days"] == 7
+        assert result["pending_days"] == 5
 
     def test_emp002_pto(self, hr_tools):
-        """EMP002 should have 12 available days (15 accrued - 3 used)."""
+        """EMP002: 9 available days (12 accrued - 3 used) per mock data."""
         result = hr_tools.check_pto_balance(employee_id="EMP002")
 
         assert result["success"] is True
-        assert result["available_days"] == 12
-        assert result["accrued_days"] == 15
+        assert result["available_days"] == 9
+        assert result["accrued_days"] == 12
+        assert result["used_days"] == 3
 
 
 class TestBenefitsStatus:
