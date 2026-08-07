@@ -12,10 +12,17 @@ faiss-cpu>=1.7.4
 numpy>=1.26.0
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
 fastmcp==3.4.5
-# fastmcp==3.4.5 pulls in fastmcp-slim[client,server]==3.4.5 transitively,
-# which itself requires mcp>=1.24.0,<2.0.0. Pin mcp explicitly here to avoid
-# the resolver picking an older mcp that lacks mcp.types.
+# `fastmcp` is a thin wrapper that always pulls in `fastmcp-slim` (the
+# runtime). `fastmcp-slim` ships with the bare client surface; to import
+# `from fastmcp import FastMCP` (which our server module does) we also need
+# the `[server]` extra, which brings in `mcp.types` and the rest of the
+# server runtime. Without this, CI fails with:
+#   ImportError: FastMCP server support is not installed.
+#   Install `fastmcp` or `fastmcp-slim[server]`.
+# Pin `mcp` explicitly so the resolver picks an SDK version with `mcp.types`.
+fastmcp-slim[server]==3.4.5
 mcp>=1.24.0,<2.0.0
 pypdf>=4.0.0
 reportlab>=4.0.0

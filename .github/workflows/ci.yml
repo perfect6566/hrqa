@@ -32,101 +32,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio httpx
+          pip install pytest pytest-asyncio pytest-cov httpx
 
       - name: Run Python syntax check
         run: |
           python -m py_compile src/rag/*.py
-          python -m py_compile src/mcp/*.py
+          python -m py_compile src/mcp_server/*.py
           python -m py_compile src/agent/*.py
           python -m py_compile src/api/*.py
           echo "Syntax check passed!"
 
-      - name: Test imports
+      - name: Run pytest with coverage
         run: |
-          python -c "from src.rag import RAGPipeline; print('RAG imports OK')"
-          python -c "from src.mcp.tools import HRTools; print('MCP tools OK')"
-          python -c "from src.agent import AgentOrchestrator; print('Agent OK')"
-
-      - name: Run MCP tool discovery test
-        run: |
-          python -c "
-          import sys
-          sys.path.insert(0, '.')
-          from src.mcp.tools import HRTools
-          tools = HRTools()
-
-          # Test lookup_employee_profile
-          result = tools.lookup_employee_profile(employee_id='EMP001')
-          assert result['success'] == True, 'lookup_employee_profile failed'
-          assert result['employee']['name'] == 'Alice Johnson', 'Wrong employee'
-          print('lookup_employee_profile: PASS')
-
-          # Test check_pto_balance
-          result = tools.check_pto_balance(employee_id='EMP001')
-          assert result['success'] == True, 'check_pto_balance failed'
-          print('check_pto_balance: PASS')
-
-          # Test lookup_benefits_status
-          result = tools.lookup_benefits_status(employee_id='EMP001')
-          assert result['success'] == True, 'lookup_benefits_status failed'
-          print('lookup_benefits_status: PASS')
-
-          # Test create_mock_hr_ticket
-          result = tools.create_mock_hr_ticket(
-              employee_id='EMP001',
-              category='pto',
-              subject='Test ticket',
-              description='Test description'
-          )
-          assert result['success'] == True, 'create_mock_hr_ticket failed'
-          print('create_mock_hr_ticket: PASS')
-
-          # Test draft_hr_email
-          result = tools.draft_hr_email(
-              employee_id='EMP001',
-              purpose='pto_request'
-          )
-          assert result['success'] == True, 'draft_hr_email failed'
-          print('draft_hr_email: PASS')
-
-          # Test check_policy_compliance
-          result = tools.check_policy_compliance(
-              employee_id='EMP001',
-              policy_area='remote_work'
-          )
-          assert result['success'] == True, 'check_policy_compliance failed'
-          print('check_policy_compliance: PASS')
-
-          print('All MCP tool tests PASSED!')
-          "
-
-      - name: Test document loading (multi-format)
-        run: |
-          python -c "
-          import sys
-          sys.path.insert(0, '.')
-          from src.rag.document_loader import DocumentLoader
-          from src.rag.chunker import DocumentChunker
-
-          loader = DocumentLoader('policies')
-          docs = loader.load_documents()
-          formats = set(d.get('metadata', {}).get('format') for d in docs)
-          print(f'Loaded {len(docs)} documents in formats: {formats}')
-          assert len(docs) > 0, 'No documents loaded'
-          assert len(formats) >= 2, f'Expected at least 2 formats, got {formats}'
-
-          chunker = DocumentChunker()
-          chunks = chunker.chunk_documents(docs)
-          print(f'Created {len(chunks)} chunks')
-          assert len(chunks) > 0, 'No chunks created'
-
-          print('Document loading test PASSED!')
-          "
-
-      - name: Run pytest
-        run: |
-          pytest tests/ -v --tb=short
+          pytest tests/ -v --tb=short \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-branch \
+            --cov-fail-under=70
 
   mcp-server-test:
     name: Test MCP Server
@@ -151,7 +74,7 @@ jobs:
           python -c "
           import sys
           sys.path.insert(0, '.')
-          from src.mcp.app import create_app
+          from src.mcp_server.app import create_app
           from fastapi.testclient import TestClient
           app = create_app()
           assert app is not None, 'MCP app not created'

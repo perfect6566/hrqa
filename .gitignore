@@ -86,3 +86,4 @@ _*.log
 # Demo / API key scripts (should never be committed)
 demoapikey.py
 *apikey*.py
+AI Architecture.pdf

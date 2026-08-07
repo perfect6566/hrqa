@@ -8,7 +8,7 @@ class TestMCPToolsIntegration:
 
     def test_all_tools_registered(self):
         """Test that all required tools are registered."""
-        from src.mcp.app import mcp_server
+        from src.mcp_server.app import mcp_server
 
         tools = mcp_server.list_tools()
         tool_names = [t["name"] for t in tools]
@@ -29,7 +29,7 @@ class TestMCPToolsIntegration:
 
     def test_tool_call_workflow(self):
         """Test a complete tool call workflow."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 
@@ -63,7 +63,7 @@ class TestMCPToolsIntegration:
 
     def test_complex_workflow(self):
         """Test complex multi-step workflow."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 

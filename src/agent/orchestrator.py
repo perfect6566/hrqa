@@ -115,7 +115,7 @@ class AgentOrchestrator:
     async def _ensure_mcp_connected(self) -> bool:
         """Connect to MCP server, refresh tool cache, and bind the executor."""
         try:
-            from ..mcp import fastmcp_client as mcp_client_module
+            from ..mcp_server import fastmcp_client as mcp_client_module
         except ImportError:
             return False
 

@@ -77,7 +77,7 @@ class TestHRTools:
 
     def test_lookup_employee_profile(self):
         """Test employee profile lookup."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 
@@ -90,7 +90,7 @@ class TestHRTools:
 
     def test_lookup_employee_by_email(self):
         """Test employee lookup by email."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 
@@ -101,7 +101,7 @@ class TestHRTools:
 
     def test_employee_not_found(self):
         """Test handling of non-existent employee."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 
@@ -112,7 +112,7 @@ class TestHRTools:
 
     def test_check_pto_balance(self):
         """Test PTO balance check."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 
@@ -125,7 +125,7 @@ class TestHRTools:
 
     def test_lookup_benefits_status(self):
         """Test benefits status lookup."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 
@@ -137,7 +137,7 @@ class TestHRTools:
 
     def test_create_mock_hr_ticket(self):
         """Test HR ticket creation."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 
@@ -155,7 +155,7 @@ class TestHRTools:
 
     def test_draft_hr_email(self):
         """Test HR email drafting."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 
@@ -172,7 +172,7 @@ class TestHRTools:
 
     def test_check_policy_compliance(self):
         """Test policy compliance check."""
-        from src.mcp.tools import HRTools
+        from src.mcp_server.tools import HRTools
 
         tools = HRTools(data_dir="mock_data")
 
@@ -206,14 +206,14 @@ class TestMCPServer:
 
     def test_mcp_server_creation(self):
         """Test MCP server can be created."""
-        from src.mcp.server import MCPServer
+        from src.mcp_server.server import MCPServer
 
         server = MCPServer(name="test-server")
         assert server.name == "test-server"
 
     def test_tool_decorator(self):
         """Test tool registration decorator."""
-        from src.mcp.server import MCPServer
+        from src.mcp_server.server import MCPServer
 
         server = MCPServer(name="test-server")
 

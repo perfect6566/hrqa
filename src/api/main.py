@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.rag import RAGPipeline
 from src.agent import AgentOrchestrator
-from src.mcp import fastmcp_client as mcp_client_module
+from src.mcp_server import fastmcp_client as mcp_client_module
 
 
 # =============================================================================
@@ -90,7 +90,7 @@ class HealthResponse(BaseModel):
 
 def run_mcp_server(port: int):
     """Run MCP server in a separate process using FastMCP."""
-    from src.mcp.app import create_app
+    from src.mcp_server.app import create_app
 
     mcp = create_app()
     mcp.run(transport="streamable-http", port=port, host="127.0.0.1")
@@ -201,7 +201,7 @@ async def lifespan(app: FastAPI):
         
         # Connect RAG pipeline to MCP server BEFORE starting MCP
         print("Connecting RAG pipeline to MCP server...")
-        from src.mcp import fastmcp_server
+        from src.mcp_server import fastmcp_server
         fastmcp_server.set_rag_pipeline(rag_pipeline)
         print("RAG pipeline connected to MCP server")
 

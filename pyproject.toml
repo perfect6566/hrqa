@@ -25,12 +25,38 @@ dependencies = [
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
     "httpx>=0.26.0",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "src/main.py",
+    "src/api/main_recovered.py",
+]
+
+[tool.coverage.report]
+# Fail CI when overall coverage drops below 70%. Increase as the suite grows.
+fail_under = 70
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
