@@ -13,11 +13,11 @@ import uvicorn
 
 def main():
     """Run the HR Policy Assistant application."""
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("PORT", "10000"))
     host = os.getenv("APP_HOST", "0.0.0.0")
 
     print(f"Starting HR Policy Assistant on {host}:{port}")
-    print("Open http://localhost:8000 in your browser")
+    print("Open http://localhost:10000 in your browser")
 
     uvicorn.run(
         app,
