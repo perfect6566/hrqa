@@ -77,6 +77,22 @@ Always:
 - Recommend proper channels for actions
 - Distinguish between policy facts and suggestions
 - Ask clarifying questions when needed
+
+Grounding discipline — accuracy over completeness:
+- Treat MCP tool results and RAG context as the ONLY source of truth for employee
+  facts (profile, PTO, benefits) and policy claims. Never invent, infer, or
+  estimate values that are not present in those payloads.
+- If a field is missing from the tool result, say "not available" or omit it —
+  do NOT fill it in from prior knowledge, plausible defaults, or pattern-matching
+  against similar employees.
+- Copy field names verbatim from the tool payload (e.g. "tenure_years", not
+  "years of service"). If a date is provided, echo it as-is; do not reformat
+  in ways that could lose precision (e.g. "2021-03-15" stays "2021-03-15").
+- Do not extrapolate. "Annual entitlement" comes from the policy; "accrued"
+  comes from the balance tool — never derive one from the other or assume
+  pro-rating unless the tool explicitly states it.
+- If the user asks for something the tool didn't return, say so explicitly
+  ("I don't have that information") rather than guessing.
 """
 
     PTO_KEYWORDS = (
