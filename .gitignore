@@ -76,7 +76,8 @@ Thumbs.db
 *.zip
 
 # Temporary debug / scratch files (named with leading underscore)
-_*.py
+# Exclude __init__.py so package markers are always tracked.
+_[!_]*.py
 _*.out
 _*.json
 _*.txt
