@@ -30,9 +30,9 @@ services:
       # OPENAI_BASE_URL can stay unset (defaults to OpenAI). For DeepSeek,
       # OpenRouter, Groq, etc. set it to the provider's OpenAI-compatible URL.
       - key: OPENAI_BASE_URL
-        value: ""
+        value: "https://api.deepseek.com/v1"
       - key: OPENAI_MODEL
-        value: deepseek-chat
+        value: deepseek-v4-flash
       # --- RAG configuration -----------------------------------------------
       - key: POLICIES_DIR
         value: policies
