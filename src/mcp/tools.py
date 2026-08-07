@@ -522,6 +522,7 @@ This is a mock email for demonstration purposes."""
         result["employee_name"] = employee["name"]
         result["policy_area"] = policy_area
         result["checked_date"] = datetime.now().strftime("%Y-%m-%d")
+        result["success"] = True
 
         return result
 

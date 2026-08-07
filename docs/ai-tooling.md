@@ -1,153 +1,389 @@
 # AI Tooling Usage
 
-This document describes how AI code generation tools were used in the development of this project.
+This document records the AI tools that were actually used to build this
+project, what they were used for, and — equally important — the concrete
+places where the AI suggestion was wrong and we had to intervene. The
+project brief explicitly asks us to "describe the impact of that tooling
+on the development process" and warns that students remain responsible
+for "correctness, security, and academic integrity of the submitted work"
+(`AI Architecture.pdf §Plagiarism Policy`).
 
-## AI Tools Used
+A more detailed bug-by-bug walkthrough is in `docs/CHALLENGES.md`. This
+file is the high-level story; the other file is the post-mortem.
 
-### 1. Cursor IDE (Primary)
-- **Usage**: Main development environment
-- **Features Used**:
-  - AI Chat for code generation
-  - Inline code completion
-  - Error explanation and fixes
-  - Documentation generation
+---
 
-### 2. OpenAI Models
-- **Usage**: Core AI functionality
-- **Models Used**:
-  - GPT-4o-mini: Main agent orchestration and generation
-  - text-embedding-3-small: Document embeddings
+## AI tools used
 
-## How AI Tools Were Used
+### 1. Cursor IDE (primary coding environment)
 
-### 1. Project Structure Planning
-- Used AI to design initial project structure
-- Got recommendations for directory organization
-- Validated architecture decisions
+| Feature | How it was used |
+| --- | --- |
+| Inline completions | Routine boilerplate (Pydantic models, FastAPI endpoints, JSON tests). |
+| Chat (Composer) | Drafting the orchestrator, the planner prompt, and the citation parser. |
+| Apply diff | Refactoring the tool-calling loop from a free-form JSON planner to native OpenAI function calling. |
+| `Read` / `Grep` / `Glob` | Grepping the repo to locate callers of a changed function before refactoring. |
+| `@terminal` | Running pytest, the MCP smoke test, and the GitHub Actions CI locally. |
 
-### 2. Code Generation
+Models the IDE was configured to use during development:
+- **GPT-5 family** for generation
+- **Claude Sonnet 4.5** for longer refactors
 
-**RAG System**:
-- Document loader templates
-- Chunking logic
-- Embedding pipeline
-- Vector store implementation
+### 2. Large language models (target providers)
 
-**MCP Server**:
-- Tool schema definitions
-- HTTP transport implementation
-- Error handling patterns
+| Model | Used in this project for |
+| --- | --- |
+| `deepseek-chat` (default) | Chat completions in the orchestrator. Free-tier friendly and OpenAI-API-compatible. |
+| `gpt-4o-mini` | Mentioned in default config; swap via `OPENAI_MODEL`. |
+| `sentence-transformers/all-MiniLM-L6-v2` | Local embeddings for the RAG index. No API cost. |
 
-**Agent Orchestrator**:
-- Task planning logic
-- Tool execution flow
-- Response generation prompts
+### 3. Standard helpers
 
-**Web Application**:
-- FastAPI endpoints
-- Chat interface HTML/CSS
-- API models
+| Tool | Used for |
+| --- | --- |
+| `pypdf` | Reading the course PDF (`AI Architecture.pdf`) and the policy PDFs. |
+| GitHub Actions | CI smoke tests + deploy. |
+| Python venv + pip | Reproducible local environment. |
 
-### 3. Documentation
-- README generation
-- Design document structure
-- Evaluation methodology
-- API documentation
+---
 
-### 4. Debugging
-- Error analysis
-- Stack trace interpretation
-- Fix suggestions
+## What AI tools were used for
 
-## What Worked Well
+### Architectural design
 
-### Code Generation Speed
-- Generated complete file structures quickly
-- Reduced boilerplate code significantly
-- Allowed focus on business logic
+The high-level shape came from the course brief in `AI Architecture.pdf`
+and from review of the FastAPI + FastMCP + openai SDK documentation. The
+LLM's main contribution in the design phase was:
 
-### Pattern Recognition
-- AI suggested appropriate design patterns
-- Recommended best practices for Python/FastAPI
-- Identified common security issues
+- Drafting the **eight MCP tool schemas** (parameter names, descriptions,
+  success/error envelope) so they line up with what the OpenAI SDK's
+  `tools=` accepts natively.
+- Suggesting the **force-call tool guard** as a safety net for the cases
+  where the LLM skips a mandatory employee-PII step. This became
+  `AgentOrchestrator._enforce_tool_guard`.
+- Drafting the **citation parser** (`_parse_body_section_names`) that
+  trusts the LLM's in-body citation over the chunk's stored `heading`
+  attribute — the chunker can mis-tag headings on overlap chunks, and
+  the LLM sees the content directly.
+
+### Code generation
+
+The majority of the source files were drafted with AI assistance and
+then reviewed/refactored by hand:
+
+| Layer | Files | AI involvement |
+| --- | --- | --- |
+| RAG | `src/rag/document_loader.py`, `chunker.py`, `embedder.py`, `vector_store.py`, `retriever.py`, `generator.py`, `rag_pipeline.py` | First-draft generation, then hand-tuning of the chunker for heading-aware split with overlap, and the embedder for FAISS persistence. |
+| MCP | `src/mcp/fastmcp_server.py`, `tools.py`, `app.py`, `fastmcp_client.py` | First-draft generation. Manual rewrite of `app.py` to fix the ASGI callable bug (see below). |
+| Agent | `src/agent/orchestrator.py`, `executor.py`, `planner.py` | Generation. Manual tuning of the tool-calling loop, the tool guard, and the DSML-stripping helper. |
+| API | `src/api/main.py`, `static/index.html` | Generation, then manual restructure of the route order so `/policy/section` is matched before `/policy/{filename}`. |
+| CI | `.github/workflows/ci.yml` | Generation. Manual fix when the third-party Action reference broke (see below). |
+| Mock data | `mock_data/*.json` | Generated by AI but cross-checked against `policies/` to make sure claims in the answers were consistent with the mock data. |
+| Policy docs | `policies/*.md`, `remote-work-policy.html` | Generated by AI. Sanity-checked by hand for inter-document consistency. |
+| Tests | `tests/test_*.py` | Generated, then expanded manually for edge cases (missing employee ID, ambiguous query, out-of-scope query). |
 
 ### Documentation
-- Generated good starting documentation
-- Created consistent formatting
-- Suggested comprehensive sections
 
-## Challenges and Limitations
+All `docs/*.md` files were drafted with AI assistance, then rewritten
+manually so the numbers line up with the actual code and the actual
+endpoint names. The first pass of every doc had placeholder values
+(`85.0%`, `TBD`, "configure after deployment") that we replaced with
+real numbers or real endpoint names.
 
-### 1. Context Window Limitations
-- Long conversations sometimes lost earlier context
-- Had to break down complex features into smaller parts
-- Sometimes repeated information
+### Debugging
 
-### 2. Domain-Specific Knowledge
-- AI needed guidance on HR-specific workflows
-- Had to provide detailed requirements
-- Some tool schemas required manual refinement
+This is where AI tooling was the most fragile. The model proposed
+plausible-looking fixes that didn't work, and the actual causes were
+always something the model couldn't see from the trace alone — version
+mismatches, an ASGI lifecycle detail, a PowerShell quoting problem.
+Each of those is in `docs/CHALLENGES.md`.
 
-### 3. Testing Edge Cases
-- Generated tests covered basic scenarios
-- Manual testing still needed for edge cases
-- Mock data required custom creation
+---
 
-### 4. Integration Complexity
-- AI sometimes generated code that worked in isolation but failed in integration
-- Required careful review of generated code
-- Some iteration needed for proper MCP protocol compliance
+## What worked well
 
-## Best Practices Discovered
+### Native OpenAI function calling
 
-1. **Start with Architecture**: Define structure before generating code
-2. **Provide Examples**: Show similar implementations for better results
-3. **Review Generated Code**: Always verify AI-generated code
-4. **Test Incrementally**: Don't generate too much before testing
-5. **Document Requirements**: Clear requirements produce better code
+Switching from a free-form JSON planner to native `tools=` /
+`tool_choice=` was a big win. The LLM picks the right tool name, the
+right arguments, and the execution loop is just `while True: call →
+parse tool_calls → execute → append`. The `ToolExecutor.parse_tool_calls`
+helper that came out of this is reused for both the openai and the
+deepseek code paths because the OpenAI SDK normalises the response for
+us.
 
-## Impact on Development
+### Heading-aware chunking, with overlap
 
-### Time Savings
-- Estimated 40-50% reduction in boilerplate code
-- Faster prototyping of features
-- Quick documentation generation
+The chunker splits on heading boundaries and falls back to token windows
+with overlap when a section is too long. The deterministic seed
+(`chunker.py` uses `random.seed(42)`) keeps the index stable across
+rebuilds, which is essential for the ablation experiments in
+`design-and-evaluation.md`.
 
-### Quality
-- Consistent code style
-- Followed best practices
-- Fewer obvious bugs
+### Tool guard as a safety net
 
-### Learning
-- Discovered new Python patterns
-- Learned FastAPI best practices
-- Improved understanding of agent architectures
+The LLM does not always remember to call `lookup_employee_profile`
+before answering a PTO question. The tool guard detects the missing
+mandatory tool from the keyword sets in `planner.py` (PTO_KEYWORDS,
+BENEFITS_KEYWORDS, REMOTE_KEYWORDS, PROFILE_KEYWORDS) and force-calls
+it. This single fix raised the workflow completion rate on
+`evaluation/questions.py` from "sometimes the LLM hallucinates the
+balance" to "the correct number is always on the table by the time the
+synthesizer runs".
 
-## Files Generated by AI
+### Pre-loop RAG hint
 
-The following files were primarily generated using AI tools:
+The orchestrator retrieves once before the tool loop, primes the LLM
+with those chunks, and only re-retrieves if the LLM calls
+`search_policy_documents` with a different query. This avoids the
+double-RAG pattern that was costing us an extra round-trip per turn
+in the first version.
 
-- `src/rag/*.py` - RAG pipeline components
-- `src/mcp/*.py` - MCP server and tools
-- `src/agent/*.py` - Agent orchestrator
-- `src/api/main.py` - Web application
-- `docs/*.md` - Documentation
-- `evaluation/*.py` - Evaluation scripts
+### Citation parser that trusts the LLM
 
-## Files Written Manually
+The chunker's overlap path can stamp a chunk with the heading of the
+*next* section while the chunk's content still belongs to the
+*previous* section. The LLM sees both the heading and the content;
+trusting the body's `[Source N: … — section]` tail keeps the citation
+footer consistent with the body even when the chunk metadata is wrong.
+This is the `AgentOrchestrator._parse_body_section_names` path.
 
-These files were written or significantly modified manually:
+---
 
-- `mock_data/*.json` - Mock data structures
-- `policies/*.md` - HR policy documents
-- `tests/*.py` - Test cases
-- `.github/workflows/ci.yml` - CI/CD pipeline
-- `pyproject.toml` - Project configuration
+## What did not work — and how we fixed it
 
-## Recommendations for Future Projects
+The AI suggestions that landed directly without intervention were the
+minority. The interesting stories are the ones where the model was
+wrong in a way that needed a careful read of the runtime evidence.
 
-1. **Use AI for**: Boilerplate, patterns, documentation, initial implementations
-2. **Manual work for**: Domain logic, data, tests, integration
-3. **Always review**: AI-generated code before committing
-4. **Iterate**: Don't expect perfect first results
-5. **Document**: Keep track of AI-assisted decisions
+### 1. GitHub Actions refused to parse the deploy step
+
+The first attempt was `render-deploy-action@v1`. GitHub's linter
+rejected it with **`Invalid workflow file: ... Expected format
+{org}/{repo}[/path]@ref. Actual 'render-deploy-action@v1'`**. The
+GitHub Action community has adopted `≥3`-segment semver and
+`owner/repo/path@ref` for monorepos; `v1` is single-segment and no
+more.
+
+We hit the same issue a second time when we picked
+`render-oss/render-deploy-action@v1.0.0` — that repo does not exist.
+`render-oss` is Render's official org, but it does not publish a
+`render-deploy-action` repo. The Action that does exist is
+`JorgeLNJunior/render-deploy`, with snake_case inputs (`service_id`,
+`api_key`). Final fix in `ci.yml`:
+
+```yaml
+- name: Deploy to Render
+  uses: JorgeLNJunior/render-deploy@v1.5.0
+  with:
+    api_key: ${{ secrets.RENDER_API_KEY }}
+    service_id: ${{ secrets.RENDER_SERVICE_ID }}
+    wait_deploy: true
+```
+
+### 2. `TypeError: FastMCP object is not callable` in the MCP smoke test
+
+The CI step that verifies the MCP server uses `starlette.testclient.TestClient`,
+which expects a real ASGI app. The first version of `src/mcp/app.py`
+returned the `FastMCP` manager object directly, which is not callable
+in the ASGI sense. The fix is to return the ASGI app the manager
+builds:
+
+```python
+def create_app():
+    mcp = initialize_server()
+    return mcp.http_app(transport="streamable-http")
+```
+
+The migration was not obvious from the FastMCP docs — we had to read
+the `public_methods` listing of `FastMCP` to discover `http_app` and
+its `transport` parameter.
+
+### 3. DeepSeek occasionally emits `<|DSML|>tool_calls>` inside the
+assistant `content` field
+
+The default model is `deepseek-chat`. Some flash variants emit
+`<|DSML|>` (or fullwidth `｜DSML｜`) pseudo-tool-call XML inside the
+content field, even when `tool_choice="none"`. The final-answer
+parser has to strip the entire block:
+
+```python
+@staticmethod
+def _strip_tool_call_artifacts(text: str) -> str:
+    markers = ("<|DSML|>", "<|dsml|>", "<|python_tag|>",
+               "<|tool_call|>", "<|tool_calls_section_end|>",
+               "｜DSML｜", "｜dsml｜", ...)
+    cut_at = len(text)
+    for m in markers:
+        idx = text.find(m)
+        if idx != -1:
+            cut_at = min(cut_at, idx)
+    return text[:cut_at].strip()
+```
+
+Without this, the user sees `[Source N: ...]` paragraphs followed by
+`<|DSML|>function_calls>...</DSML|>` chunks in the chat UI.
+
+### 4. CI fails on `OPENAI_API_KEY` missing
+
+The RAG pipeline's first action is to instantiate the OpenAI client to
+embed a couple of warm-up requests. When the GitHub Actions container
+has no `OPENAI_API_KEY`, the OpenAI SDK raises a clean
+`Missing credentials` exception. The first version of the MCP
+`_initialize_rag_pipeline` propagated that exception, the lifespan
+failed, and the MCP smoke test crashed. The fix is to wrap the
+initialisation in `try/except` and return `None` so the orchestrator
+degrades to mock-data-only operation:
+
+```python
+try:
+    pipeline = RAGPipeline(...)
+    return pipeline
+except Exception as e:
+    print(f"[MCP] Failed to initialize RAG pipeline: {e}")
+    return None
+```
+
+The CI smoke test then has nothing to assert about RAG, only about
+the MCP HTTP endpoints and the tool name list.
+
+### 5. The LLM hallucinates a PTO balance for `EMPXXX` that doesn't exist
+
+When the user asks about a non-existent employee ID, the
+`lookup_employee_profile` tool returns `success=False, error="Employee
+not found"`. Most models respect this and answer "I don't have record
+for EMPXXX", but some flash variants gloss over it and **invent a
+balance**. The fix is a short-circuit in the orchestrator:
+
+```python
+not_found = self._detect_employee_not_found(invocations, employee_id)
+if not_found:
+    return {
+        "answer": f"I could not find employee **{employee_id}**...",
+        ...
+    }
+```
+
+`agent_behavior / action_safety` improves from "occasional hallucination"
+to "always safe".
+
+### 6. PowerShell escaping ate our shell pipelines
+
+The Cursor IDE's default terminal on Windows is PowerShell. Several
+shell patterns that work on bash did not work on PowerShell:
+
+- `$_.PSIsContainer` in a `Get-ChildItem | Where-Object` — PowerShell
+  treats `$_` as a cmdlet but reads it as one too eagerly.
+- `python -m foo --arg "value with space"` inside `powershell -Command`
+  — the outer quotes are stripped before Python sees them.
+- `cd foo && python bar.py` — `&&` is not a valid separator on
+  PowerShell 5.x.
+
+Workaround: keep the heavy lifting in **Python scripts** invoked as
+`powershell -Command "python path/to/script.py"`. The script writes
+deterministic output to a file; the shell only runs one command. This
+is how every smoke test in this repo is written.
+
+### 7. `starlette.testclient` deprecation warning
+
+The CI logs include:
+
+```
+StarletteDeprecationWarning: Using `httpx` with `starlette.testclient`
+is deprecated; install `httpx2` instead.
+```
+
+The suggested migration is to switch to `httpx2`, but `httpx2` does
+not yet expose the internals `starlette.testclient` needs (the
+`portal.call` thread bridge). Leaving the warning in the log is the
+pragmatic choice for now; the test still works.
+
+### 8. FastAPI route ordering
+
+```python
+@app.get("/policy/section")    # MUST come first
+@app.get("/policy/{filename}")  # wildcard
+```
+
+If the order is swapped, hitting `/policy/section?document_id=...`
+returns a 404 because FastAPI matches the wildcard with `filename="section"`.
+The README also documents this explicitly.
+
+---
+
+## Files written by hand, not by AI
+
+These files were authored manually because the AI's first draft was
+either wrong or unsafe:
+
+- `src/mcp/app.py` — ASGI-callable fix
+- `.github/workflows/ci.yml` — deploy action fix
+- `src/agent/orchestrator.py` — DSML stripping, tool guard, employee-not-found short-circuit
+- `docs/deployed.md` — replaced `TBD` placeholders with real endpoints
+- `docs/CHALLENGES.md` — entirely hand-written
+- `mock_data/*.json` — cross-checked against `policies/` to make sure
+  the answers line up with the policies
+
+## Files generated primarily by AI
+
+These files were drafted primarily by AI tooling and reviewed before
+commit:
+
+- `src/rag/*.py` — RAG pipeline components
+- `src/mcp/fastmcp_server.py`, `tools.py` — MCP server and tool definitions
+- `src/api/main.py` — FastAPI web app
+- `policies/*.md` — policy documents
+- `tests/test_*.py` — test files
+- `pyproject.toml`, `requirements.txt` — dependency manifests
+- `docs/design-and-evaluation.md`, `docs/ai-tooling.md` — design write-ups
+
+---
+
+## Best practices that emerged
+
+1. **Write the API surface first, then the LLM prompts.** The MCP tool
+   schemas are the contract; once they're stable, the planner prompt
+   almost writes itself.
+2. **Always have a deterministic seed.** `random.seed(42)` in the
+   chunker and in `evaluator.py` makes the index reproducible and the
+   evaluation results reproducible.
+3. **Trust the reranker over the chunker.** Citations where the chunk
+   metadata disagrees with the LLM's body citation should be biased
+   toward the body — the LLM has more context.
+4. **CI must work without `OPENAI_API_KEY`.** Wrap any optional
+   network call in `try/except` and degrade to a no-op.
+5. **Forbid hidden chain-of-thought.** The orchestrator's `trace` is
+   operational only — tool names, arguments, latencies, result snippets.
+   No "the model thought X" steps, per the project brief.
+6. **Mock data must be obviously synthetic.** Names like "Alice
+   Johnson" + clearly-fake IDs (`EMP001`–`EMP010`) keep the test
+   realistic without inviting a real PII disclosure issue.
+
+## Impact on the development process
+
+- **Speed.** Initial scaffolding (RAG stub, MCP stub, FastAPI stub) was
+  done in under two hours. By contrast, the bugs that needed manual
+  reading of the FastMCP source / GitHub Actions docs / Starlette
+  internals took roughly the same wall-clock time each.
+- **Quality.** The AI drafts were noisy (duplicate code, wrong type
+  hints, occasional hallucinations in the policy text). The final
+  shipped code has every one of those manually corrected.
+- **Learning.** The biggest upside was reading the diff between the
+  AI's first draft and the final commit — that's where the real
+  engineering knowledge sat. See `docs/CHALLENGES.md` for the gory
+  details.
+
+---
+
+## What we would do differently next time
+
+- Use the **Anthropic prompt-caching** tricks for the orchestrator's
+  system prompt to cut per-request cost.
+- Add a **small statistical test** for the chunker seed (assert that
+  the chunk count is stable across runs) so accidental
+  non-determinism is caught in CI.
+- Wire the **evaluation harness** as a JSON-schema test fixture so
+  `pytest pytest_evaluation.py` can run without an `OPENAI_API_KEY`
+  (use a `responses` mock for the OpenAI client).
+- Put the MCP server in a **separate process group** from the FastAPI
+  app so a misbehaving MCP server can't take the web app down.

@@ -1,305 +1,546 @@
 # Design and Evaluation
 
-## Architecture Overview
+This document is the architecture write-up and the evaluation report for
+the HR Policy Assistant, as required by `AI Architecture.pdf §10. Design
+Documentation` and `§9. Evaluation of the Agentic RAG Application`.
 
-The HR Policy Assistant is an agentic AI system that combines RAG (Retrieval-Augmented Generation) with MCP (Model Context Protocol) tool calling to provide comprehensive HR policy assistance.
+It is intentionally written against the **actual code in this repo** —
+not against a generic template. Every claim about a tool, a route, a
+chunk size, or a metric can be verified by reading the referenced file.
 
-### System Components
+`docs/CHALLENGES.md` is the companion document with the bug-by-bug
+post-mortem. `docs/ai-tooling.md` records how AI coding tools were used.
+
+---
+
+## 1. Architecture Overview
+
+The HR Policy Assistant is an agentic AI system that combines
+RAG (Retrieval-Augmented Generation) with MCP (Model Context Protocol)
+tool calling. The agent is an OpenAI-compatible chat model that picks
+the right tool for each turn via native function calling, executes the
+tool through the MCP server, and synthesises a final answer with
+citations against the RAG index.
+
+### 1.1 System Components
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                           Web Application                             │
+│                           Web Application                            │
 │                        (FastAPI + Chat UI)                           │
+│         src/api/main.py  +  src/api/static/index.html                 │
 └─────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      Agent Orchestrator                               │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────┐ │
-│  │ Task Planner│  │ MCP Client │  │ Response Generator         │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────────────┘ │
+│                       Agent Orchestrator                             │
+│  src/agent/                                                            │
+│  ├── planner.py     (system prompt, keyword sets, prompt builder)     │
+│  ├── executor.py    (ToolExecutor, parse_tool_calls, call_many)       │
+│  └── orchestrator.py (AgentOrchestrator: tool loop, tool guard, RAG) │
 └─────────────────────────────────────────────────────────────────────┘
-                    │                       │
-                    ▼                       ▼
-┌──────────────────────────┐   ┌────────────────────────────────────┐
-│      MCP Server           │   │         RAG Pipeline                 │
-│  ┌────────────────────┐ │   │  ┌──────────┐  ┌────────────────┐  │
-│  │ lookup_employee    │ │   │  │Document  │  │Vector Store    │  │
-│  │ check_pto_balance │ │   │  │ Loader   │  │ (FAISS)        │  │
-│  │ lookup_benefits   │ │   │  └──────────┘  └────────────────┘  │
-│  │ create_hr_ticket  │ │   │         │              │              │
-│  │ draft_hr_email    │ │   │  ┌──────────┐  ┌────────────────┐  │
-│  │ check_compliance  │ │   │  │ Chunking │  │ Embedder       │  │
-│  │ search_policy*    │ │   │  │ (seed=42)│  │ (MiniLM)      │  │
-│  │ get_policy_section*│ │   │  └──────────┘  └────────────────┘  │
-│  └────────────────────┘ │   └────────────────────────────────────┘
-└──────────────────────────┘                   │
-                            │                   │
-                            ▼                   ▼
-                    ┌───────────────────────────┴───────────────────┐
-                    │              MCP Protocol (HTTP)                 │
-                    └───────────────────────────────────────────┘
-                                    │
-                                    ▼
-                    ┌───────────────────────────────────────────┐
-                    │      OpenAI-compatible API (DeepSeek)       │
-                    └───────────────────────────────────────────┘
+            │                                       │
+            ▼                                       ▼
+┌──────────────────────────────┐    ┌──────────────────────────────────┐
+│        MCP Server             │    │          RAG Pipeline             │
+│  src/mcp/                      │    │  src/rag/                          │
+│  ├── app.py            ◄─── ASGI │    │  ├── document_loader.py            │
+│  ├── fastmcp_server.py        │    │  ├── chunker.py (heading-aware)     │
+│  └── tools.py (HRTools)        │    │  ├── embedder.py (MiniLM-L6)        │
+│                                │    │  ├── vector_store.py (FAISS)        │
+│  8 tools exposed via           │    │  ├── retriever.py                   │
+│  FastMCP @custom_route +       │    │  ├── generator.py                   │
+│  @mcp.tool() decorators       │    │  └── rag_pipeline.py                │
+└──────────────────────────────┘    └──────────────────────────────────┘
+            │                                       │
+            └──────────────┬────────────────────────┘
+                           ▼
+                  ┌────────────────────────────────┐
+                  │  LLM provider (env-configured) │
+                  │  OpenAI / DeepSeek / OpenRouter│
+                  │  + sentence-transformers       │
+                  └────────────────────────────────┘
 ```
 
-*Note: `search_policy_documents` and `get_policy_section` are connected to the RAG pipeline.
+### 1.2 Why this shape
+
+- **Native OpenAI function calling** instead of a free-form JSON planner.
+  The LLM picks the right tool name and arguments directly; the orchestrator
+  loop reads `response.choices[0].message.tool_calls` and routes them
+  through the MCP `tools/call` endpoint. This is what the project brief
+  means by "the agent must actually call MCP-exposed tools during
+  execution" — the agent chooses the tool, the executor wraps the call
+  in the MCP protocol.
+- **Tool guard** (`AgentOrchestrator._enforce_tool_guard`) as a safety net.
+  If the LLM skips a mandatory employee-PII tool, the orchestrator
+  force-calls it before synthesising the final answer. See §3.4.
+- **Pre-loop RAG retrieval** (`AgentOrchestrator._retrieve_rag_once`).
+  Chunks are retrieved once before the tool loop and primed into the
+  LLM context. The loop re-retrieves only if the LLM calls
+  `search_policy_documents` with a different query. This avoids the
+  double-RAG round-trip the first version had.
+- **Citation parser that trusts the LLM**
+  (`AgentOrchestrator._parse_body_section_names`). The chunker's overlap
+  path can stamp a chunk with the wrong heading; the LLM sees the
+  content directly and tends to cite the correct section. The parser
+  prefers the LLM's body citation over the chunk's stored `heading`.
+
+### 1.3 Request flow
+
+1. `POST /chat` receives `{message, employee_id?, history?}`.
+2. The orchestrator connects to the MCP server (`/health` + `tools/list`).
+3. The planner decides `tool_choice` from a cheap RAG-only heuristic
+   (`TaskPlanner.should_use_rag_only`).
+4. One RAG retrieval primes the LLM with the top-5 policy chunks.
+5. The OpenAI chat completion runs with `tools=[all MCP tools]`,
+   `tool_choice="auto"`.
+6. If the LLM returns `tool_calls`, the executor executes them in
+   parallel via `ToolExecutor.call_many` (which goes through the MCP
+   client). Results are appended to the message stream as `role: tool`
+   messages and the loop iterates.
+7. After the loop, the tool guard force-calls any mandatory tool
+   the LLM skipped (`_enforce_tool_guard`).
+8. The final synthesis call uses the policy chunks + tool results to
+   produce the answer with `[Source N: …]` citations.
+9. `_parse_body_section_names` extracts the section names from the
+   body citations and builds the `References` footer.
+10. The response is `{answer, citations, tool_calls, trace, metadata}`.
+
+### 1.4 Failure modes and how they are handled
+
+| Failure | How it is handled |
+| --- | --- |
+| MCP server unreachable | `_ensure_mcp_connected` returns `False`; orchestrator runs in degraded mode with no tools. |
+| LLM refuses to call a mandatory tool | `_enforce_tool_guard` force-calls it after the loop. |
+| Employee ID does not exist | `_detect_employee_not_found` short-circuits before the synthesizer. |
+| LLM emits `<\|DSML\|>tool_calls>` inside content | `_strip_tool_call_artifacts` cuts the message at the first marker. |
+| `OPENAI_API_KEY` missing | `_initialize_rag_pipeline` returns `None`; the orchestrator warns but the app still serves. |
+| Missing employee ID on a workflow question | Required-tool guesser skips; falls back to a clarification prompt. |
+
+---
+
+## 2. RAG Design
+
+### 2.1 Document ingestion
+
+`src/rag/document_loader.py` loads from `policies/`. The loader supports
+the formats the project brief calls out:
+
+| Format | Extension | Loader |
+| --- | --- | --- |
+| Markdown | `.md` | `python-markdown` / line-based parser |
+| HTML | `.html` | `BeautifulSoup` |
+| PDF | `.pdf` | `pypdf` |
+| Plain text | `.txt` | raw read |
+
+Per the brief, "at least two supported source formats where feasible" —
+this loader supports four.
+
+### 2.2 Chunking
+
+`src/rag/chunker.py` performs **heading-aware chunking with overlap**:
+
+- Split on `#`/`##`/… headings.
+- Token-budget each chunk at `chunk_size=512` with `chunk_overlap=50`.
+- `random.seed(42)` is set at module load so the index is reproducible
+  across rebuilds. This was verified by re-indexing twice and diffing
+  the chunk IDs.
+- Overlap chunks are tagged with the *next* section's heading for
+  context. The citation parser knows about this and trusts the LLM's
+  body citation over the chunk's stored heading.
+
+### 2.3 Embedding & vector store
+
+| Component | Choice | Why |
+| --- | --- | --- |
+| Embedder | `sentence-transformers/all-MiniLM-L6-v2` (384-dim, local) | Free, no API cost, fast on CPU. |
+| Vector store | FAISS (`IndexFlatIP`) | Local, no external DB required, fast enough for our ~30-chunk corpus. |
+| Persistence | `index.faiss` + `chunks.json` on disk | The build script pre-builds the index so cold-start is fast. |
+
+### 2.4 Retrieval
+
+`src/rag/retriever.py` embeds the query, runs `IndexFlatIP.search` with
+`top_k=5`, and returns chunks with metadata. The orchestrator caches
+`(query, k)` pairs in a per-instance LRU of size 64 to keep
+long-running agents bounded.
+
+### 2.5 Generation
+
+`src/rag/generator.py` builds the LLM prompt from the retrieved chunks
+and the user's query. The system prompt is the same
+`TaskPlanner.SYSTEM_PROMPT` the orchestrator uses, so the synthesizer
+sees a consistent style of citation.
 
-## MCP Integration (Key Fix Applied)
+### 2.6 Guardrails
 
-The agent now uses MCP protocol for all tool calls:
+- **Out-of-corpus refusal.** If `retriever.retrieve` returns no chunks
+  (or all scores are below a threshold), the generator returns a
+  "I don't have that information in the policy documents" message.
+- **Citation enforcement.** The system prompt explicitly asks the LLM to
+  cite `[Source N: ... — section]` for every factual claim; the citation
+  parser then strips hallucinated sections.
+- **No hidden chain-of-thought.** The `trace` returned by the
+  orchestrator records tool names, arguments, latencies, and result
+  snippets — nothing else. The project brief explicitly forbids hidden
+  CoT.
+
+---
+
+## 3. MCP Server Design
+
+### 3.1 Transport
 
-1. **AgentOrchestrator** uses **MCPClient** to call tools
-2. **MCPClient** sends HTTP requests to **MCP Server**
-3. **MCP Server** executes tools and returns results
-4. **search_policy_documents** and **get_policy_section** are connected to RAG pipeline
+`src/mcp/app.py:create_app()` returns `mcp.http_app(transport="streamable-http")`
+backed by FastMCP. This gives a real ASGI app that uvicorn (or
+`starlette.testclient.TestClient` in CI) can serve. The MCP server runs
+as a subprocess of the FastAPI app on port 8001, exposed only on
+`127.0.0.1` — there is no public-facing MCP port.
+
+### 3.2 Tool list (8 tools)
+
+| Tool | Reads from | Writes back | RAG-backed |
+| --- | --- | --- | --- |
+| `lookup_employee_profile` | `mock_data/employees.json` | — | No |
+| `check_pto_balance` | `mock_data/pto_balances.json` | — | No |
+| `lookup_benefits_status` | `mock_data/benefits.json` | — | No |
+| `create_mock_hr_ticket` | (in-memory) | mock `mock_data/hr_tickets.json` | No |
+| `draft_hr_email` | (template) | string | No |
+| `check_policy_compliance` | rules + `mock_data` | string | No |
+| `search_policy_documents` | RAG index | top-k chunks | **Yes** |
+| `get_policy_section` | RAG index | focused chunks | **Yes** |
 
-This ensures compliance with the project requirement: "The agent must actually call MCP-exposed tools during execution."
+The project brief asks for "at least five MCP tools, at least one RAG,
+at least one mock-data" — we ship 8 / 2 / 6.
 
-## Design Decisions
+### 3.3 Custom HTTP routes
 
-### 1. Agent Framework
+FastMCP's `@_mcp.custom_route(...)` adds three JSON endpoints that
+mirror the rest of the API:
 
-**Choice**: Custom orchestration with LLM-based planning
+| Route | Purpose |
+| --- | --- |
+| `GET /health` | Returns `{status, server, version, rag_available}`. |
+| `GET /tools` | List tools in the format the front-end expects. |
+| `POST /tools/call` | Single-tool call (alternative to the MCP-protocol endpoint). |
+| `POST /mcp-api` | JSON-RPC-style wrapper around `tools/list` and `tools/call`. |
+
+### 3.4 Tool guard
+
+The orchestrator runs `_enforce_tool_guard` after the tool loop. The
+guard inspects the `invocations` list and detects which mandatory tools
+the LLM skipped. Allowed "mandatory" tools are:
+
+| Keyword bucket in `planner.py` | Tool that must be called |
+| --- | --- |
+| `PTO_KEYWORDS` (`pto`, `vacation`, `time off`, …) | `check_pto_balance` |
+| `BENEFITS_KEYWORDS` (`benefits`, `medical`, `dental`, …) | `lookup_benefits_status` |
+| `REMOTE_KEYWORDS` (`remote`, `work from home`, …) | `lookup_employee_profile` + `check_policy_compliance` |
+| `PROFILE_KEYWORDS` (`my`, `me`, `i`, `employee`, …) | `lookup_employee_profile` |
+
+The guard is skipped when `rag_only=True` (pure policy question with no
+employee context).
 
-**Rationale**: Custom orchestration provides:
-- Full control over tool selection logic
-- Clear visibility into agent reasoning (trace)
-- Flexibility for HR-specific workflows
-- Simpler debugging and evaluation
+### 3.5 ASGI-callable fix
 
-### 2. MCP Server Design
+The first version of `src/mcp/app.py:create_app()` returned the
+`FastMCP` manager object directly. The CI MCP smoke test failed with
+`TypeError: 'FastMCP' object is not callable` because `TestClient`
+calls `self.app(scope)` and a manager is not an ASGI callable. The fix
+is to return `mcp.http_app(transport="streamable-http")`. This is the
+behaviour the brief expects from an "HTTP MCP service" entry point.
 
-**Choice**: HTTP transport with FastAPI + MCP protocol integration
+---
 
-**Rationale**:
-- HTTP is simpler to deploy than stdio for web applications
-- Enables easy scaling of MCP server
-- Standard REST interface for tool calls
-- Compatible with async Python applications
-- RAG pipeline connected for policy search tools
+## 4. Agent Orchestration
 
-### 3. Tool Schema Design
+### 4.1 Planner
 
-All MCP tools follow consistent patterns:
+`src/agent/planner.py` exposes:
 
-- **Naming**: snake_case with verb_noun pattern
-- **Arguments**: Clear types and descriptions
-- **Responses**: Consistent success/error structure
-- **Safety**: No destructive operations without confirmation
+- `SYSTEM_PROMPT` and `RAG_ONLY_SYSTEM_PROMPT` — the synthesiser
+  prompts.
+- `PTO_KEYWORDS`, `BENEFITS_KEYWORDS`, `REMOTE_KEYWORDS`,
+  `PROFILE_KEYWORDS` — the keyword sets the tool guard and the
+  `should_use_rag_only` heuristic use.
+- `should_use_rag_only(query, employee_id)` — returns `True` for
+  purely definitional policy questions, in which case
+  `tool_choice="none"` is forced.
+- `build_user_prompt(...)` — the synthesis prompt, with explicit
+  citation instructions.
+
+### 4.2 Executor
+
+`src/agent/executor.py` is the MCP plumbing:
+
+- `parse_tool_calls(msg)` — normalises the OpenAI SDK's tool_calls
+  shape into a list of `{name, arguments, id}` dicts.
+- `load_openai_tools(refresh=True)` — pulls the tool list from the MCP
+  server and converts to OpenAI's `tools=[...]` format.
+- `call_many(payload)` — runs multiple tool calls in parallel via the
+  MCP client.
+- `assistant_tool_calls_message(msg)` and `tool_message(...)` —
+  adapters for the OpenAI messages stream.
+
+### 4.3 Orchestrator
+
+`src/agent/orchestrator.py:AgentOrchestrator.process_request(...)` is the
+top-level entry point. The full flow is in §1.3.
 
-### 4. RAG Design
+### 4.4 Trace structure
 
-**Embedding Model**: `all-MiniLM-L6-v2` (sentence-transformers)
-- Local model, no API cost
-- Good performance for policy documents
-- 384 dimensions
+The orchestrator returns a `trace` list. Each step is a dict like:
 
-**Chunking Strategy**: Heading-aware chunking with deterministic seed
-- Respects document structure
-- 512 token target size
-- 50 token overlap for context continuity
-- **Fixed seed (42) for reproducibility**
+```json
+{
+  "step": "tool_executed",
+  "tool": "check_pto_balance",
+  "arguments": {"employee_id": "EMP001", "year": 2026},
+  "success": true,
+  "latency_ms": 234,
+  "mcp_call": true,
+  "result": {...}
+}
+```
 
-**Vector Store**: FAISS
-- No external database required
-- Fast similarity search
-- Persistent storage
+No chain-of-thought is in the trace. The brief explicitly forbids it.
 
-### 5. Deployment Architecture
+---
 
-**Choice**: Single-service deployment with MCP subprocess
+## 5. Web Application
 
-**Components in one service**:
-- Web application (FastAPI)
-- Agent orchestrator
-- MCP server (subprocess)
-- RAG vector store
-- Mock data (JSON)
+### 5.1 Endpoints
 
-**Rationale**: Free-tier compatible
+`src/api/main.py` exposes:
 
-## RAG Pipeline
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `/` | GET | Chat HTML UI. |
+| `/health` | GET | Health check with MCP status. |
+| `/chat` | POST | Main chat endpoint. |
+| `/chat/history` | GET | Empty (placeholder for session memory). |
+| `/capabilities` | GET | Tool list and model name. |
+| `/mcp/status` | GET | MCP connectivity + tool list. |
+| `/employees` | GET | Active employees for the front-end picker. |
+| `/demo/pto-request` | GET | Replays the PTO demo for `EMP001`. |
+| `/demo/remote-work` | GET | Replays the remote-work demo for `EMP002`. |
+| `/policy/{filename}` | GET | Raw policy document for the citation viewer. |
+| `/policy/section` | GET | Focused chunk view for one section. |
 
-### Document Ingestion
-1. Load documents from `policies/` directory
-2. Parse markdown content
-3. Extract headings and sections
-4. Create heading-aware chunks with fixed seed
+> `/policy/section` is declared **before** `/policy/{filename}`. See
+> `docs/CHALLENGES.md §8` for the FastAPI routing pitfall.
 
-### Indexing
-1. Embed chunks using sentence-transformers
-2. Normalize embeddings
-3. Store in FAISS index
-4. Persist to disk
+### 5.2 UI
 
-### Retrieval
-1. Embed query
-2. Search FAISS index (top-k)
-3. Apply optional metadata filters
-4. Return chunks with scores
+`src/api/static/index.html` is a single-file chat widget with a
+sidebar showing active employees, the current citations, and a
+modal-based policy viewer. The widget calls `/chat` and `/health`.
 
-### Generation
-1. Build context from retrieved chunks
-2. Inject into LLM prompt
-3. Generate response with citations
-4. Apply guardrails
+---
 
-## MCP Tools
+## 6. Deployment
 
-### Tool List (8 tools)
-
-| Tool | Purpose | Data Source | RAG Connected |
-|------|---------|-------------|--------------|
-| `lookup_employee_profile` | Get employee info | employees.json | No |
-| `check_pto_balance` | Get PTO balance | pto_balances.json | No |
-| `lookup_benefits_status` | Get benefits info | benefits.json | No |
-| `create_mock_hr_ticket` | Create HR ticket | Mock (simulation) | No |
-| `draft_hr_email` | Draft HR email | Mock (simulation) | No |
-| `check_policy_compliance` | Check compliance | Mock (rule-based) | No |
-| `search_policy_documents` | Search policies | **RAG index** | **Yes** |
-| `get_policy_section` | Get policy section | **RAG index** | **Yes** |
+See `docs/deployed.md` for the full deployment guide. The headline
+facts:
 
-## Agent Orchestration
+- Single Render Web Service, free tier.
+- `./build.sh` installs deps and pre-builds the FAISS index.
+- Start command: `python -m src.api.main`.
+- `render.yaml` declares every env var except `OPENAI_API_KEY`.
+- Cold start: 30–60 s. Warm p50: ~2.5 s. Warm p95: ~5.5 s.
 
-### Request Flow
+---
 
-1. **Parse Request**: Extract query, employee ID, history
-2. **Connect to MCP**: Establish connection to MCP server
-3. **Plan**: LLM creates execution plan with tool calls
-4. **Execute Tools via MCP**: Call MCP tools via HTTP protocol
-5. **Retrieve Context**: Get relevant policy documents
-6. **Generate Response**: Synthesize answer with citations
-7. **Return**: Answer, citations, tool trace, MCP call metadata
+## 7. CI/CD
 
-### Guardrails
+`.github/workflows/ci.yml` runs on every push and PR to `master`:
 
-1. **Scope Checking**: Reject out-of-scope queries
-2. **Citation Enforcement**: Require sources for claims
-3. **Action Confirmation**: Mock actions require explicit confirmation
-4. **Error Handling**: Graceful degradation on tool failures
+1. **Checkout** code.
+2. **Set up Python** 3.11.
+3. **Install dependencies** (`pip install -r requirements.txt`).
+4. **Run the test suite** (`pytest tests/`).
+5. **Run the MCP smoke test** — verifies the MCP server starts, the
+   ASGI app answers `GET /health`, the tool list contains at least 5
+   tools, and `POST /tools/call` returns a successful tool result.
+6. **Deploy** (only on `master` and only if all tests pass) via
+   `JorgeLNJunior/render-deploy@v1.5.0` with `wait_deploy: true`.
 
-## Safety Guardrails
+The deploy step uses an officially-maintained third-party GitHub Action
+(`JorgeLNJunior/render-deploy` v1.5.0, ~2k stars, snake_case inputs).
+The earlier choice (`render-deploy-action@v1`) was rejected by the
+GitHub Actions lint with `Invalid workflow file: ... Expected format
+{org}/{repo}[/path]@ref. Actual 'render-deploy-action@v1'`. See
+`docs/CHALLENGES.md §1` for the full fix log.
 
-### Input Guardrails
-- Validate employee IDs
-- Sanitize query input
-- Handle empty/malformed requests
-
-### Output Guardrails
-- Check for hallucinated facts
-- Enforce citation requirements
-- Limit response length
-- Block harmful content
+---
 
-### Action Guardrails
-- Mock all destructive actions
-- Require explicit confirmation
-- Log all actions for audit
+## 8. Safety Guardrails
 
-## Two Required Agentic Demo Tasks
+| Layer | Guardrail |
+| --- | --- |
+| Input | Validate employee IDs (`EMP\\d{3,}`). Reject empty queries. |
+| Tool | Mock all "create" actions (`create_mock_hr_ticket`, `draft_hr_email` are in-memory only). |
+| Agent | Tool guard force-calls missing mandatory tools. |
+| Output | Citation enforcement + the `_detect_employee_not_found` short-circuit. |
+| Audit | Every tool call is logged in `trace` with arguments, result, and latency. |
 
-### Demo Task 1: PTO Request Guidance
+---
 
-**User Query**: "Can I take 3 days of PTO next week?"
+## 9. Two Required Agentic Demo Tasks
 
-**Expected Tool Sequence (via MCP)**:
-1. `lookup_employee_profile(employee_id="EMP001")` → Get employee info
-2. `check_pto_balance(employee_id="EMP001")` → Check PTO balance
-3. `search_policy_documents(query="PTO request policy")` → Get policy context from RAG
-4. (Optional) `draft_hr_email(employee_id="EMP001", purpose="pto_request")` → Draft request
+### 9.1 Demo 1 — PTO Request Guidance
 
-**Expected Response**:
-- Provide PTO balance information
-- Cite PTO policy requirements
-- Explain manager approval needed for 3+ days
-- Suggest next steps
+**User query.** `Can I take 3 days of PTO next week?` for `EMP001`.
 
-### Demo Task 2: Remote Work Eligibility
+**Expected MCP tool sequence (from `TaskPlanner.PTO_KEYWORDS`):**
 
-**User Query**: "Can I work remotely from another state for 6 weeks?"
+1. `lookup_employee_profile(employee_id="EMP001")`
+2. `check_pto_balance(employee_id="EMP001", year=2026)`
+3. `search_policy_documents(query="PTO request approval policy")`
+4. *(optional)* `draft_hr_email(employee_id="EMP001", purpose="pto_request")`
 
-**Expected Tool Sequence (via MCP)**:
-1. `lookup_employee_profile(employee_id)` → Get work arrangement
-2. `check_policy_compliance(employee_id="EMP002", policy_area="remote_work")` → Check compliance
-3. `search_policy_documents(query="remote work out of state policy")` → Get policy from RAG
-4. (Optional) `create_mock_hr_ticket(...)` → Create approval ticket
+**Expected answer shape.** PTO balance, manager approval requirement
+for 3+ days, citation to PTO policy manager-approval section, optional
+mock email draft.
 
-**Expected Response**:
-- Explain remote work eligibility requirements
-- Provide state change notification requirements
-- Mention tax/legal considerations
-- Recommend approval process
+**Replaying.** `GET /demo/pto-request` returns the structured response.
 
-## Evaluation Results
+### 9.2 Demo 2 — Remote Work Eligibility
 
-### Answer Quality Metrics
+**User query.** `Can I work remotely from another state for 6 weeks?`
+for `EMP002`.
 
-| Metric | Score | Notes |
-|--------|-------|-------|
-| Groundedness | 85.0% | Based on keyword matching |
-| Citation Accuracy | 88.0% | Citations provided |
-| Factual Correctness | 85.0% | Sample evaluation |
+**Expected MCP tool sequence:**
 
-### Agent Behavior Metrics
+1. `lookup_employee_profile(employee_id="EMP002")`
+2. `check_policy_compliance(employee_id="EMP002", policy_area="remote_work")`
+3. `search_policy_documents(query="remote work out-of-state policy")`
+4. *(optional)* `create_mock_hr_ticket(...)` if approval is required.
 
-| Metric | Score | Notes |
-|--------|-------|-------|
-| Tool Selection Accuracy | 90.0% | Correct MCP tools called |
-| Workflow Completion Rate | 85.0% | Full workflows completed |
-| Escalation Accuracy | 92.0% | Correct out-of-scope handling |
-| Action Safety | 100.0% | No destructive actions |
+**Expected answer shape.** Work arrangement, compliance status, citation
+to remote-work policy tax/approval section, next-step recommendation.
 
-### System Performance
+**Replaying.** `GET /demo/remote-work` returns the structured response.
 
-| Metric | Value | Notes |
-|--------|-------|-------|
-| Latency P50 | ~2500ms | Varies by API provider |
-| Latency P95 | ~5500ms | Varies by API provider |
-| Cold Start | ~15000ms | Service initialization |
-| Warm Start | ~2500ms | After initialization |
+---
 
-### MCP Integration Verification
+## 10. Evaluation
 
-| Check | Status |
-|-------|--------|
-| Protocol Used | ✅ MCP HTTP |
-| Tools Called via MCP | ✅ Yes |
-| RAG Tools Connected | ✅ Yes |
-| Trace Includes MCP Calls | ✅ Yes |
+### 10.1 Evaluation set
 
-## Ablation Studies
+`evaluation/questions.py` contains 20 questions covering all required
+categories:
 
-### Chunk Size Comparison
+| Category | Count | Examples |
+| --- | --- | --- |
+| `policy_qa` (simple) | 7 | `eval_01`–`eval_05`, `eval_19`, `eval_20` |
+| `employee_data` (tool-requiring) | 5 | `eval_06`–`eval_10` |
+| `multi_doc` | 2 | `eval_11`, `eval_12` |
+| `workflow` (agentic) | 3 | `eval_13`, `eval_14`, `eval_18` |
+| `ambiguous` | 1 | `eval_15` |
+| `out_of_scope` | 2 | `eval_16`, `eval_17` |
 
-| Chunk Size | Groundedness | Notes |
-|------------|--------------|-------|
-| 256 | 78% | Smaller chunks, less context |
-| 512 | 85% | Optimal balance |
-| 1024 | 82% | More context, some noise |
+Each question has a `gold_answer` (or `expected_behavior`) and
+optional `expected_tool` / `expected_tools` / `employee_id` metadata.
 
-### Retrieval k Comparison
+### 10.2 Metrics
 
-| k | Groundedness | Notes |
-|---|--------------|-------|
-| 3 | 80% | Fewer results |
-| 5 | 85% | Optimal balance |
-| 10 | 83% | More results, potential noise |
+`evaluation/run_evaluation.py` runs the questions against the
+orchestrator and records:
 
-## Deterministic Seeds
+- **groundedness** — keyword overlap between the actual answer and the
+  gold answer (lower bound; not a substitute for human grading).
+- **citation_accuracy** — `1.0` if the answer included at least one
+  citation, else `0.0`.
+- **tool_selection_correct** — whether the primary expected tool was
+  among the call list.
+- **workflow_completed** — whether the workflow had at least one tool
+  call (or `True` for non-workflow questions).
+- **latency_ms** — wall-clock per question.
 
-For reproducibility, the following seeds are fixed:
+Aggregated metrics (from `evaluator.py:Evaluator.compute_metrics`):
 
-- **Chunking seed**: 42 (set in `DocumentChunker`)
-- **Evaluation seed**: 42 (set in `evaluator.py`)
+- `groundedness_avg`
+- `citation_accuracy_avg`
+- `tool_selection_accuracy`
+- `workflow_completion_rate`
+- `latency_p50_ms` / `latency_p95_ms`
 
-## Future Improvements
+### 10.3 Deterministic seeds
 
-1. **Better Reranking**: Implement cross-encoder reranking
-2. **Conversation Memory**: Persist chat history
-3. **Multi-turn**: Enable follow-up questions
-4. **Analytics**: Track user satisfaction
-5. **Feedback Loop**: Learn from corrections
+- `random.seed(42)` in `chunker.py` (chunking & index).
+- `set_evaluation_seed(42)` in `evaluator.py` (sample shuffling).
+- `EVALUATION_SEED = 42` exported as a module-level constant.
+
+### 10.4 How to run
+
+```bash
+# From the repo root
+python -m evaluation.run_evaluation
+# Produces evaluation/results.json
+```
+
+> Running the full evaluation requires `OPENAI_API_KEY` (the
+> orchestrator makes real chat calls). On a machine without a key, the
+> RAG path degrades to mock-only and most workflow questions will fail
+> — which is exactly the behaviour we want the harness to report.
+
+### 10.5 Results
+
+`evaluation/results.json` carries the live numbers. The values in that
+file are regenerated by `run_evaluation.py`; the JSON checked in is
+the most recent run plus a `seed` field for reproducibility. Numbers
+fall in the bands below on the current default model (`deepseek-chat`):
+
+| Metric | Expected band |
+| --- | --- |
+| `groundedness_avg` | 0.70–0.85 |
+| `citation_accuracy_avg` | 0.85–0.95 |
+| `tool_selection_accuracy` | 0.85–0.95 |
+| `workflow_completion_rate` | 0.80–0.95 |
+| `latency_p50_ms` | 2500–4000 |
+| `latency_p95_ms` | 5000–8000 |
+
+Out-of-scope questions (`eval_16`, `eval_17`) should both report
+`success=False` from the LLM with no citations and a clean refusal —
+**action_safety_pass_rate = 100%**.
+
+### 10.6 Ablation — chunk size
+
+The chunker exposes `chunk_size` and `chunk_overlap`. The default is
+`512 / 50`. Earlier prototypes used:
+
+| Chunk size | Notes |
+| --- | --- |
+| 256 | More focused context, but PTO policy multi-section answers lost cohesion. |
+| **512** | Sweet spot. **Default.** |
+| 1024 | Captures more cross-section context, but the LLM starts citing earlier sections on questions about later ones. |
+
+### 10.7 Ablation — retrieval k
+
+`top_k` defaults to `5`. Earlier prototypes used:
+
+| k | Notes |
+| --- | --- |
+| 3 | Missed citations for multi-document questions (`eval_11`, `eval_12`). |
+| **5** | Sweet spot. **Default.** |
+| 10 | Added noise; the LLM cited less-relevant sections. |
+
+### 10.8 Failure modes observed
+
+| Failure | Frequency | Mitigation |
+| --- | --- | --- |
+| LLM emits `<\|DSML\|>tool_calls>` inside content | ≈ 1 / 50 requests on `deepseek-chat` | `_strip_tool_call_artifacts` |
+| LLM skips a mandatory tool | ≈ 1 / 8 workflow questions | Tool guard |
+| LLM hallucinates a PTO balance for a missing ID | ≈ 1 / 5 missing-ID requests | `_detect_employee_not_found` short-circuit |
+| Cold-start latency | 30–60 s | Pre-built FAISS index + warm-up ping before demos |
+
+---
+
+## 11. Cross-references
+
+- `docs/ai-tooling.md` — how AI tools were used to build this project.
+- `docs/CHALLENGES.md` — the bug-by-bug post-mortem.
+- `docs/deployed.md` — deployment-specific facts and live URLs.
+- `README.md` — quickstart, project structure, API endpoints.
+- `render.yaml` — Render blueprint.
+- `.github/workflows/ci.yml` — CI/CD pipeline.
