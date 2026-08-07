@@ -13,7 +13,9 @@ numpy>=1.26.0
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
 fastmcp==3.4.5
-fastmcp-slim[server]==3.4.5
-mcp>=1.0.0,<2.0.0
+# fastmcp==3.4.5 pulls in fastmcp-slim[client,server]==3.4.5 transitively,
+# which itself requires mcp>=1.24.0,<2.0.0. Pin mcp explicitly here to avoid
+# the resolver picking an older mcp that lacks mcp.types.
+mcp>=1.24.0,<2.0.0
 pypdf>=4.0.0
 reportlab>=4.0.0

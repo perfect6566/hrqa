@@ -516,6 +516,13 @@ class AgentOrchestrator:
             source_map = {}
             for i, c in enumerate(retrieved_chunks, 1):
                 chunk_meta = c.get("metadata", {}) or {}
+                # Use the on-disk filename for the References row so it stays
+                # consistent with the citation chip rendered by the frontend
+                # (which also uses `filename`). The LLM may emit a different
+                # document *title* in in-body citations like
+                # "[Source 1: Paid Time Off (PTO) Policy — Overview]" —
+                # that is the model's stylistic choice and we don't rewrite
+                # the body; we only keep the footer consistent with the chip.
                 filename = chunk_meta.get("filename") or c.get("document_id", "unknown")
                 # Use only the primary (first) heading if multiple are joined
                 fallback_heading = c.get("heading", "") or "General"
