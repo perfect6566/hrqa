@@ -202,31 +202,44 @@ class TestEmbedder:
 
 
 class TestMCPServer:
-    """Test MCP server."""
+    """Test MCP server (FastMCP-based)."""
 
     def test_mcp_server_creation(self):
-        """Test MCP server can be created."""
-        from src.mcp_server.server import MCPServer
+        """Test the FastMCP server can be created via the new module."""
+        from src.mcp_server.fastmcp_server import create_mcp_server, get_mcp_server
 
-        server = MCPServer(name="test-server")
-        assert server.name == "test-server"
+        server = create_mcp_server()
+        assert server is not None
+        # ``create_mcp_server`` caches the instance, so the global getter
+        # should return the same object.
+        assert get_mcp_server() is server
+        assert server.name == "HR Policy Assistant"
 
-    def test_tool_decorator(self):
-        """Test tool registration decorator."""
-        from src.mcp_server.server import MCPServer
+    def test_tool_registration(self):
+        """Test that the FastMCP server exposes the HR tools we expect."""
+        import asyncio
+        from src.mcp_server.fastmcp_server import create_mcp_server
 
-        server = MCPServer(name="test-server")
+        server = create_mcp_server()
 
-        @server.tool(
-            name="test_tool",
-            description="A test tool",
-            input_schema={"type": "object"}
-        )
-        def test_handler():
-            return {"result": "success"}
+        async def _names():
+            tools = await server.list_tools()
+            return [t.name for t in tools]
 
-        tools = server.list_tools()
-        assert any(t["name"] == "test_tool" for t in tools)
+        names = asyncio.run(_names())
+
+        expected_tools = {
+            "lookup_employee_profile",
+            "check_pto_balance",
+            "lookup_benefits_status",
+            "create_mock_hr_ticket",
+            "draft_hr_email",
+            "check_policy_compliance",
+            "search_policy_documents",
+            "get_policy_section",
+        }
+        missing = expected_tools - set(names)
+        assert not missing, f"Missing tools: {missing}"
 
 
 if __name__ == "__main__":
