@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -500,16 +501,29 @@ class AgentOrchestrator:
                 continue
 
         if sources_in_answer:
-            # Build source mapping with section info
+            # Build source mapping with section info.
+            #
+            # Source-of-truth for the section name in the footer is the LLM's
+            # in-body citation, not the chunk's stored `heading` attribute.
+            # The chunker can mis-tag a chunk's heading when content spans
+            # across section boundaries (see `_chunk_by_headings` overlap path
+            # in src/rag/chunker.py). The LLM sees both the `Section:` line
+            # and the chunk content in its RAG context, and it tends to cite
+            # the section that matches the content. Trusting the body citation
+            # keeps the footer consistent with the body even when the chunk
+            # metadata is wrong.
+            body_sections = AgentOrchestrator._parse_body_section_names(final_answer)
             source_map = {}
             for i, c in enumerate(retrieved_chunks, 1):
                 chunk_meta = c.get("metadata", {}) or {}
                 filename = chunk_meta.get("filename") or c.get("document_id", "unknown")
-                # Use the primary heading (first section) as the section reference
-                heading = c.get("heading", "") or "General"
-                # Take only the first heading if multiple are joined
-                primary_heading = heading.split(" / ")[0].strip() if heading else "General"
-                source_map[i] = (filename, primary_heading)
+                # Use only the primary (first) heading if multiple are joined
+                fallback_heading = c.get("heading", "") or "General"
+                fallback_heading = fallback_heading.split(" / ")[0].strip() or "General"
+                # Prefer the section name the LLM wrote in the body for this
+                # source number; fall back to the chunk's stored heading.
+                heading = body_sections.get(i, fallback_heading)
+                source_map[i] = (filename, heading)
 
             # Add clear source mapping at the end (no hyperlinks)
             summary_lines = ["\n\n---\n**References:**"]
@@ -671,6 +685,75 @@ class AgentOrchestrator:
             if idx != -1:
                 cut_at = min(cut_at, idx)
         return text[:cut_at].strip()
+
+    # ------------------------------------------------------------------ #
+    # Citation parsing                                                    #
+    # ------------------------------------------------------------------ #
+
+    # Matches in-body citation markers the model emits when grounding a
+    # claim in a RAG source, e.g.:
+    #   [Source 1: remote-work-policy.md]
+    #   [Source 2: data-security-policy.pdf — 3.1 Account Management]
+    #   [Source 2: Data Security and IT Policy — 3.1 Account Management]
+    # Captures (source_number, after-colon-payload) — the payload is the
+    # optional "title — section" or "filename — section" tail that follows
+    # the source number.
+    _BODY_CITATION_RE = re.compile(
+        r"\[Source\s+(\d+)\s*:\s*([^\]]+?)\]",
+        re.IGNORECASE,
+    )
+    # Splits "title-or-filename — section" / "title-or-filename - section"
+    # into a (lead, section) tuple. We only return the section if it looks
+    # like a heading (not a year or a sentence fragment).
+    _SECTION_SPLIT_RE = re.compile(r"\s+[—–-]\s+")
+
+    @classmethod
+    def _parse_body_section_names(cls, text: str) -> Dict[int, str]:
+        """Extract (source_number -> section_name) from the LLM's in-body citations.
+
+        The system prompt instructs the model to cite sources as
+        ``[Source N: <title or filename> — <section>]``. The model's
+        judgement about which section the content actually came from is
+        usually more accurate than the ``heading`` field stored on the
+        chunk, because the chunker's overlap path can stamp a chunk with
+        the *next* section's heading while the chunk's content still
+        belongs to the *previous* section (see ``_chunk_by_headings`` in
+        ``src/rag/chunker.py``).
+
+        Returns a dict keyed by source number; absent keys mean the model
+        did not emit a parseable in-body citation for that source, in
+        which case callers should fall back to the chunk's stored
+        ``heading``.
+        """
+        if not text:
+            return {}
+
+        out: Dict[int, str] = {}
+        for match in cls._BODY_CITATION_RE.finditer(text):
+            try:
+                src_num = int(match.group(1))
+            except (TypeError, ValueError):
+                continue
+            payload = (match.group(2) or "").strip()
+            if not payload:
+                continue
+            # The payload may be a bare filename (e.g. "remote-work-policy.md")
+            # or "title — section". Only treat it as a section name if there
+            # is a separator and the trailing part looks like a heading
+            # (short, no terminating punctuation like '.' or '!').
+            parts = cls._SECTION_SPLIT_RE.split(payload, maxsplit=1)
+            if len(parts) != 2:
+                continue
+            section = parts[1].strip()
+            # Reject obvious non-heading tails (sentences, year ranges, etc.)
+            if not section or len(section) > 120:
+                continue
+            if section.endswith((".", "!", "?")):
+                continue
+            # Prefer the first (most authoritative) section name seen for a
+            # given source number; later duplicates are usually redundant.
+            out.setdefault(src_num, section)
+        return out
 
     @staticmethod
     def _detect_employee_not_found(
