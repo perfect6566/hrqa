@@ -146,8 +146,33 @@ def stub_orchestrator(monkeypatch):
     monkeypatch.setattr(api_main, "get_orchestrator", _fake_get_orchestrator)
 
     # Also patch the lifespan so it does not try to spawn an MCP
-    # subprocess or load OpenAI credentials.
+    # subprocess or load OpenAI credentials. We still need to seed
+    # the lazy-init primitives (``_init_event`` / ``_init_lock``) the
+    # API module now relies on, and mark initialization as already
+    # done so ``ensure_initialized()`` is a no-op for every request.
+    import asyncio as _asyncio
+
+    # Seed the lazy-init primitives NOW (synchronously) so the very
+    # first request inside the test finds ``_init_event`` already set
+    # and short-circuits before launching the real heavyweight init.
+    api_main._init_event = _asyncio.Event()
+    api_main._init_lock = _asyncio.Lock()
+    api_main._init_event.set()
+    api_main._init_error = None
+
+    # Belt-and-braces: stub out the real initializer so it never gets
+    # to overwrite our stub orchestrator with a real one.
+    def _noop_init_sync():
+        return None
+
+    monkeypatch.setattr(api_main, "_init_heavy_components_sync", _noop_init_sync)
+
     async def _noop_lifespan(app):
+        # Reaffirm the seeds in case anything got reset, then bail out.
+        api_main._init_event = _asyncio.Event()
+        api_main._init_lock = _asyncio.Lock()
+        api_main._init_event.set()
+        api_main._init_error = None
         yield
 
     app = api_main.app

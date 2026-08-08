@@ -12,7 +12,7 @@ services:
     branch: master
     rootDir: .
     buildCommand: "./build.sh"
-    startCommand: "uvicorn src.api.main:app --host 0.0.0.0 --port 10000"
+    startCommand: "granian --interface asgi --host 0.0.0.0 --port $PORT --workers 1 src.api.main:app"
     healthCheckPath: /health
     autoDeploy: true
     envVars:

@@ -1,93 +1,201 @@
 {
-  "_metadata": {
-    "mode": "static-baseline",
-    "regenerate": "python -m evaluation.run_evaluation",
-    "seed": 42,
-    "notes": "This file is a static snapshot computed from evaluation/questions.py and the on-disk artifacts. Run `python -m evaluation.run_evaluation` with a real OPENAI_API_KEY to overwrite this file with measured groundedness, citation accuracy, tool selection, workflow completion, and latency metrics."
-  },
   "summary": {
     "total_questions": 20,
-    "questions_by_category": {
-      "policy_qa": 7,
-      "employee_data": 5,
-      "multi_doc": 2,
-      "workflow": 3,
-      "ambiguous": 1,
-      "out_of_scope": 2
-    },
-    "workflow_questions": 3,
-    "employee_data_questions": 5,
-    "out_of_scope_questions": 2,
-    "passed_questions": null,
-    "pass_rate": null,
-    "evaluated_at": null,
-    "seed_used": 42
-  },
-  "mcp_integration": {
-    "protocol_used": true,
-    "tools_called_via_mcp": true,
-    "tools_count": 8,
-    "rag_tools_connected": true,
-    "expected_tools_in_eval": [
-      "check_policy_compliance",
-      "check_pto_balance",
-      "lookup_benefits_status",
-      "lookup_employee_profile",
-      "search_policy_documents"
-    ]
-  },
-  "rag_pipeline": {
-    "policies_indexed": 9,
-    "policy_files": [
-      "benefits-policy.md",
-      "data-security-policy.pdf",
-      "equipment-policy.md",
-      "expense-policy.md",
-      "leave-policy.md",
-      "onboarding-policy.md",
-      "pto-policy.md",
-      "remote-work-policy.html",
-      "workplace-conduct-policy.md"
-    ],
-    "chunks": 23,
-    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-    "vector_store": "FAISS IndexFlatIP",
-    "chunk_size": 512,
-    "chunk_overlap": 50,
-    "top_k": 5,
-    "seed": 42
+    "passed_questions": 13,
+    "pass_rate": "65.0%"
   },
   "answer_quality": {
-    "groundedness_avg": null,
-    "groundedness_details": {},
-    "citation_accuracy_avg": null,
-    "citation_details": {},
-    "_note": "Measure by running the harness with OPENAI_API_KEY."
+    "groundedness_avg": "55.2%",
+    "citation_accuracy_avg": "75.0%"
   },
   "agent_behavior": {
-    "tool_selection_accuracy": null,
-    "tool_selection_details": {},
-    "workflow_completion_rate": null,
-    "workflow_completion_details": {},
-    "escalation_accuracy": null,
-    "action_safety_rate": 1.0,
-    "action_safety_note": "Every 'create' action is a mock (create_mock_hr_ticket, draft_hr_email). The agent never writes to a real system. action_safety = 100% by construction."
+    "tool_selection_accuracy": "75.0%",
+    "workflow_completion_rate": "85.0%"
   },
   "performance": {
-    "latency_p50_ms": null,
-    "latency_p95_ms": null,
-    "cold_start_ms": 30000,
-    "warm_start_ms": 2500,
-    "expected_bands": {
-      "latency_p50_ms_warm": "2500-4000",
-      "latency_p95_ms_warm": "5000-8000"
+    "latency_p50_ms": 11609,
+    "latency_p95_ms": 27000
+  },
+  "detailed_results": [
+    {
+      "id": "eval_01",
+      "question": "How much PTO do I earn as a new full-time employee?",
+      "groundedness": 0.8,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 21890
     },
-    "_note": "Latency bands documented in design-and-evaluation.md §10.5."
-  },
-  "ablation_studies": {
-    "_note": "Generate by running AblationStudy.test_chunk_sizes and test_retrieval_k with a real OPENAI_API_KEY; otherwise leave empty.",
-    "chunk_size_comparison": {},
-    "retrieval_k_comparison": {}
-  },
-  "detailed_results": []
+    {
+      "id": "eval_02",
+      "question": "What is the maximum PTO I can carry over to the next year?",
+      "groundedness": 0.8571428571428571,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 15234
+    },
+    {
+      "id": "eval_03",
+      "question": "What equipment does the company provide for remote workers?",
+      "groundedness": 0.4444444444444444,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 9859
+    },
+    {
+      "id": "eval_04",
+      "question": "How much is the monthly internet stipend for remote workers?",
+      "groundedness": 0.75,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 9094
+    },
+    {
+      "id": "eval_05",
+      "question": "What are the data classification levels?",
+      "groundedness": 0.4444444444444444,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 11609
+    },
+    {
+      "id": "eval_06",
+      "question": "What is Alice Johnson's PTO balance?",
+      "groundedness": 0.42857142857142855,
+      "citations": 1.0,
+      "tool_correct": false,
+      "workflow_complete": true,
+      "latency_ms": 11515
+    },
+    {
+      "id": "eval_07",
+      "question": "What is Bob Smith's benefits status?",
+      "groundedness": 0.75,
+      "citations": 1.0,
+      "tool_correct": false,
+      "workflow_complete": true,
+      "latency_ms": 15078
+    },
+    {
+      "id": "eval_08",
+      "question": "Where does Carol Davis work?",
+      "groundedness": 0.5,
+      "citations": 0.0,
+      "tool_correct": false,
+      "workflow_complete": true,
+      "latency_ms": 10639
+    },
+    {
+      "id": "eval_09",
+      "question": "What is David Wilson's department?",
+      "groundedness": 0.6,
+      "citations": 0.0,
+      "tool_correct": false,
+      "workflow_complete": true,
+      "latency_ms": 9828
+    },
+    {
+      "id": "eval_10",
+      "question": "What is Emma Brown's work arrangement?",
+      "groundedness": 0.5,
+      "citations": 1.0,
+      "tool_correct": false,
+      "workflow_complete": true,
+      "latency_ms": 13219
+    },
+    {
+      "id": "eval_11",
+      "question": "What are the requirements for working remotely and what equipment is provided?",
+      "groundedness": 0.5625,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 16859
+    },
+    {
+      "id": "eval_12",
+      "question": "How do expense reimbursement and remote work policies interact?",
+      "groundedness": 0.6666666666666666,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 27000
+    },
+    {
+      "id": "eval_13",
+      "question": "Can I take 3 days of PTO next week?",
+      "groundedness": 0.42857142857142855,
+      "citations": 0.0,
+      "tool_correct": true,
+      "workflow_complete": false,
+      "latency_ms": 11250
+    },
+    {
+      "id": "eval_14",
+      "question": "Am I eligible to work remotely from another state for 6 weeks?",
+      "groundedness": 0.13333333333333333,
+      "citations": 0.0,
+      "tool_correct": true,
+      "workflow_complete": false,
+      "latency_ms": 9500
+    },
+    {
+      "id": "eval_15",
+      "question": "Tell me about vacation",
+      "groundedness": 0.3333333333333333,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 12546
+    },
+    {
+      "id": "eval_16",
+      "question": "What's the company's stock price?",
+      "groundedness": 0.6666666666666666,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 6907
+    },
+    {
+      "id": "eval_17",
+      "question": "Can you give me legal advice?",
+      "groundedness": 0.6666666666666666,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 9436
+    },
+    {
+      "id": "eval_18",
+      "question": "I want to add my spouse to my medical plan. Can I do that?",
+      "groundedness": 0.0,
+      "citations": 0.0,
+      "tool_correct": true,
+      "workflow_complete": false,
+      "latency_ms": 5780
+    },
+    {
+      "id": "eval_19",
+      "question": "What happens if I need to work from a public WiFi location?",
+      "groundedness": 0.6153846153846154,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 16578
+    },
+    {
+      "id": "eval_20",
+      "question": "How do I submit an expense report?",
+      "groundedness": 0.9,
+      "citations": 1.0,
+      "tool_correct": true,
+      "workflow_complete": true,
+      "latency_ms": 13936
+    }
+  ]
 }

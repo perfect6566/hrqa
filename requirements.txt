@@ -1,19 +1,23 @@
-sentence-transformers>=2.2.2
-openai>=1.12.0
+# ----------------------------------------------------------------------------
+# Web framework + ASGI server
+# ----------------------------------------------------------------------------
+# We pick `granian` over `uvicorn` for two reasons:
+#   1. Faster cold start (~100-200 ms vs uvicorn's ~600 ms), which
+#      matters on Render's free tier where the worker is suspended
+#      after 15 min of inactivity.
+#   2. granian is implemented in Rust, so it tolerates the brief CPU
+#      throttling Render applies to free instances without dropping
+#      in-flight requests.
+#
+# The companion ASGI server is set in render.yaml's `startCommand`.
 fastapi>=0.109.0
-uvicorn>=0.27.0
+granian>=1.6.0
 jinja2>=3.1.0
-chromadb>=0.4.22
-httpx>=0.26.0
 python-multipart>=0.0.6
-pydantic>=2.5.0
-tiktoken>=0.5.2
-faiss-cpu>=1.7.4
-numpy>=1.26.0
-pytest>=7.4.0
-pytest-asyncio>=0.23.0
-pytest-cov>=4.1.0
-fastmcp==3.4.5
+
+# ----------------------------------------------------------------------------
+# MCP server / client
+# ----------------------------------------------------------------------------
 # `fastmcp` is a thin wrapper that always pulls in `fastmcp-slim` (the
 # runtime). `fastmcp-slim` ships with the bare client surface; to import
 # `from fastmcp import FastMCP` (which our server module does) we also need
@@ -22,7 +26,43 @@ fastmcp==3.4.5
 #   ImportError: FastMCP server support is not installed.
 #   Install `fastmcp` or `fastmcp-slim[server]`.
 # Pin `mcp` explicitly so the resolver picks an SDK version with `mcp.types`.
+fastmcp==3.4.5
 fastmcp-slim[server]==3.4.5
 mcp>=1.24.0,<2.0.0
+
+# ----------------------------------------------------------------------------
+# LLM (OpenAI-compatible) + token counting
+# ----------------------------------------------------------------------------
+openai>=1.12.0
+tiktoken>=0.5.2
+httpx>=0.26.0
+
+# ----------------------------------------------------------------------------
+# Embeddings (lazy-loaded on first request - see src/api/main.py)
+# ----------------------------------------------------------------------------
+# fastembed pulls ONNX Runtime transitively. We deliberately moved away
+# from sentence-transformers to keep the Render free-tier (512 MB) worker
+# from OOMing on the first request that triggers embedder initialization.
+# The model name "sentence-transformers/all-MiniLM-L6-v2" resolves to the
+# same ONNX-exported weights used by the old sentence-transformers install.
+fastembed>=0.3.5
+
+# ----------------------------------------------------------------------------
+# Vector store + numerics
+# ----------------------------------------------------------------------------
+faiss-cpu>=1.7.4
+numpy>=1.26.0
+pydantic>=2.5.0
+
+# ----------------------------------------------------------------------------
+# Document loading
+# ----------------------------------------------------------------------------
 pypdf>=4.0.0
 reportlab>=4.0.0
+
+# ----------------------------------------------------------------------------
+# Tests
+# ----------------------------------------------------------------------------
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
