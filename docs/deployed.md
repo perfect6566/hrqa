@@ -38,10 +38,11 @@ to the running service.
 | Endpoint | Method | Verified behaviour |
 | --- | --- | --- |
 | `/` | GET | Returns the chat HTML UI from `src/api/static/index.html`. |
-| `/health` | GET | Returns `{status, app_status, mcp_connected, index_status, tools_count, mcp_protocol_used}`. JSON, no auth. |
+| `/health` | GET | **Liveness** — returns `{status, app_status, initialized}` as soon as the worker is listening. Does **not** touch MCP / RAG. |
+| `/ready` | GET | **Readiness** — returns `{status, initialized, mcp_connected, index_status, init_error?}`. Heavy init may still be in flight. |
+| `/mcp/status` | GET | MCP reachability + tool list: `{connected, tools_count, tools, server_url}`. The chat UI polls this for the "MCP connected · 8 tools" indicator. |
 | `/chat` | POST | Body `{message, employee_id?, history?}`; returns `{answer, citations, tool_calls, trace, metadata}`. |
 | `/capabilities` | GET | Lists the 8 MCP tool names and the LLM model. |
-| `/mcp/status` | GET | Reports MCP connectivity, tool count, and the server URL. |
 | `/employees` | GET | Convenience endpoint that returns active employees from `mock_data/employees.json` for the front-end picker. |
 | `/demo/pto-request` | GET | Replays the PTO request guidance demo for `EMP001`. |
 | `/demo/remote-work` | GET | Replays the remote work eligibility demo for `EMP002`. |
@@ -170,31 +171,70 @@ railway up
 
 Render's free tier spins the service down after roughly 15 minutes of
 inactivity. The first request after a spin-down wakes the container and
-triggers the full startup:
+triggers the full startup.
 
-1. Import FastAPI + uvicorn (~3 s)
-2. Load `sentence-transformers/all-MiniLM-L6-v2` into memory (~5 s)
-3. Load the FAISS index from `./data/vector_store` (~1 s)
-4. Spawn the MCP subprocess and wait for its `/health` (`max 15 s`)
-5. Initialise the orchestrator with the OpenAI client (~1 s)
+### The problem we had to solve
+
+The previous version of the lifespan did heavy initialization
+synchronously, before `listen()` returned: import `fastapi`, load the
+embedding model into memory, load the FAISS index, spawn the MCP
+subprocess, and wait for the OpenAI client. On a 512 MB Render free
+instance this took longer than Render's 30–60 second health-probe
+timeout. The probe timed out, Render marked the deploy as failed, and
+the service was never reachable. See `CHALLENGES.md §31` for the full
+post-mortem.
+
+### What the lifespan does now
+
+The lifespan is split into a **cheap phase** that must precede
+`listen()` and a **heavy phase** that runs in the background:
+
+1. **Cheap phase (lifespan, blocks `listen()`):**
+   - Read environment variables and print status,
+   - create the `asyncio.Event` / `asyncio.Lock` primitives,
+   - spawn a fire-and-forget `asyncio.Task` (`heavy-init-prewarm`) that
+     runs the heavy init in a worker thread.
+
+   `listen()` returns within ~1 second, so Render's health probe is
+   satisfied immediately.
+
+2. **Heavy phase (background task, `asyncio.to_thread`):**
+   - Construct the MCP client (no I/O),
+   - spawn the MCP subprocess and poll `/health`,
+   - build the `RAGPipeline` (loads the pre-built FAISS index),
+   - attach the RAG pipeline to the MCP server,
+   - construct the `AgentOrchestrator` (OpenAI client).
+
+   This finishes in **5–8 s** on a warm Render free instance.
+
+3. **First `/chat`** that actually needs the embedding model awaits
+   `ensure_initialized(timeout=120)`. The embedder model itself is
+   built lazily on the first embedding call (§2.3.1 of
+   `docs/design-and-evaluation.md`), which adds the dominant cost on a
+   cold start.
+
+### Measured outcome
 
 | Phase | Expected latency |
 | --- | --- |
-| Cold start (after 15 min idle) | 30–60 s |
-| Warm start (recent traffic) | 1.5–3 s for a single chat request |
+| First `/health` response after spin-down | **~1 s** (was: never — health probe timed out) |
+| Heavy init finishes | ~5–8 s in background |
+| First `/chat` (cold) | **~60 s** end-to-end, dominated by first embedder load |
+| First `/chat` (warm) | ~2.5–15 s |
 | Chat P50 (warm) | ~2.5 s |
 | Chat P95 (warm) | ~5.5 s |
 
-**Warm-up before a demo.** Hit `/health` once before the recorded demo so
-the service is awake and the model is loaded. The health endpoint returns
-`200 {"status": "healthy", ...}` once the MCP server is reachable.
+**Warm-up before a demo.** Hit `/health` once before the recorded demo
+so the heavy init is already finished by the time the camera starts.
 
 ```bash
 curl -s https://hrqa-web.onrender.com/health | jq
 ```
 
-If the response is `503` or the request times out, the service is still
-spinning up — wait 30 seconds and retry.
+If the response is `200` and `initialized: true` the service is fully
+ready. If `initialized: false`, heavy init is still in flight — wait a
+few seconds and retry. The readiness probe at `/ready` returns the
+same state plus `init_error` if heavy init failed.
 
 ---
 
@@ -241,12 +281,14 @@ python -m src.api.main
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `/health` reports `mcp_connected: false` | MCP subprocess still booting | Wait ~5 s and retry. |
-| `/chat` returns `503 Agent not initialized` | Lifespan startup failed | Check Render logs for traceback; usually a missing `OPENAI_API_KEY`. |
-| First chat after deploy is slow | Cold-start of FAISS + sentence-transformers | Hit `/health` once to warm up. |
+| `/health` reports `mcp_connected: false` | Heavy init still running (background task hasn't reached MCP spawn) | Wait ~5 s and retry; `/ready` shows live progress. |
+| `/chat` returns `503 Agent not initializing` or `503 Agent initialization failed` | Lifespan startup is still in flight or failed | Check Render logs for the `[lazy-init]` trace; most commonly a missing `OPENAI_API_KEY`. |
+| First chat after deploy takes ~60 s | First-time load of the embedder model (ONNX) on a cold start | Hit `/health` once to trigger the heavy init; subsequent calls are warm. |
+| `/ready` returns `initialized: true, mcp_connected: false` briefly | Heavy init finished but MCP subprocess not yet bound | Wait 1–3 s; the orchestrator retries MCP attach. |
 | `starlette.testclient` `StarletteDeprecationWarning` in CI | starlette 1.x is transitioning to `httpx2` | Harmless — `TestClient` still works. Tracked in `docs/CHALLENGES.md`. |
 | CI `mcp-server-test` fails on `TypeError: FastMCP object is not callable` | Old code returned the FastMCP manager instead of its ASGI app | `create_app()` now returns `mcp.http_app(transport="streamable-http")`. |
 | RAG pipeline logs `Missing credentials` warning in CI | CI doesn't have `OPENAI_API_KEY` | `_initialize_rag_pipeline` catches the exception and degrades to mock data only. CI is intentionally non-RAG. |
+| Render free cold-start never finishes | Old code did heavy init synchronously inside the lifespan, blocking `listen()` past the health probe timeout | Two-phase lazy init (§5.3 of `docs/design-and-evaluation.md`); `/health` is now live in ~1 s.
 
 ---
 

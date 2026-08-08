@@ -44,7 +44,15 @@ from pydantic import BaseModel, Field
 # ----------------------------------------------------------------------------
 # Load .env file from project root.
 project_root = Path(__file__).parent.parent.parent
-load_dotenv(project_root / ".env", override=True)
+
+# IMPORTANT: do NOT pass ``override=True`` here.
+#
+# In production Render sets OPENAI_API_KEY / OPENAI_BASE_URL via the
+# dashboard. ``override=True`` would let a stale or partial .env file
+# (e.g. one checked in by accident) silently overwrite those values.
+# Letting existing process env take precedence means the dashboard wins
+# by default, which is the contract Render expects.
+load_dotenv(project_root / ".env", override=False)
 
 import sys
 sys.path.insert(0, str(project_root))
@@ -256,6 +264,15 @@ def _init_heavy_components_sync() -> None:
 
         # Agent orchestrator (this also runs an MCP health check).
         try:
+            # Surface the LLM config the orchestrator will actually use so
+            # "UnsupportedProtocol" failures in production have an obvious
+            # smoking gun (a missing or empty OPENAI_BASE_URL).
+            effective_base_url = os.getenv("OPENAI_BASE_URL") or "<unset - defaults to api.openai.com>"
+            effective_api_key_prefix = (os.getenv("OPENAI_API_KEY") or "")[:7]
+            print(
+                f"[lazy-init] LLM config: model={os.getenv('OPENAI_MODEL', 'deepseek-chat')!r} "
+                f"base_url={effective_base_url!r} api_key_prefix={effective_api_key_prefix!r}"
+            )
             print("[lazy-init] Initializing agent orchestrator...")
             orchestrator = AgentOrchestrator(
                 rag_pipeline=rag_pipeline,

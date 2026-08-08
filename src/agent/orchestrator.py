@@ -59,6 +59,28 @@ class AgentOrchestrator:
 
         api_key = api_key or os.getenv("OPENAI_API_KEY")
         base_url = base_url or os.getenv("OPENAI_BASE_URL")
+
+        # Surface misconfiguration loudly at startup rather than waiting for
+        # the first user request to die with ``UnsupportedProtocol`` deep in
+        # the OpenAI SDK. Either ``base_url`` (when non-default) or
+        # ``api_key`` must be present; both being empty falls through to
+        # the SDK defaults, which would silently point at api.openai.com
+        # and produce a confusing auth error rather than a clear config one.
+        if not api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY is not set. Configure it in the Render "
+                "dashboard (Environment tab) for production or in .env "
+                "for local development."
+            )
+        if not base_url:
+            # No explicit override -> default OpenAI endpoint. Log it so the
+            # operator can see we're hitting api.openai.com and not, e.g.,
+            # the DeepSeek endpoint they meant to wire up.
+            print(
+                "[orchestrator] OPENAI_BASE_URL not set; using default "
+                "https://api.openai.com/v1"
+            )
+
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
         self.planner = TaskPlanner(model=model, api_key=api_key, base_url=base_url)

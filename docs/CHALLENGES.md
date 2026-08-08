@@ -683,9 +683,113 @@ now a one-shot script that streams to a file outside the repo.
 
 ---
 
+## 31. The lifespan blocked Render's health probe during cold-start
+
+**Symptom.** After the first deploy, `https://hrqa-web.onrender.com/health`
+timed out for 30-60 seconds and Render marked the deploy as failed
+("service did not become healthy in time"). Locally the app started in
+two seconds. The Render log showed the lifespan entering, then nothing
+until the eventual 500 from the health probe.
+
+**Root cause.** The old `lifespan` was monolithic: it imported the
+RAG pipeline, the agent orchestrator, and FastMCP *before*
+`listen()` returned. On Render's free tier this meant:
+
+1. Importing `sentence-transformers` (~990 MB dep tree) — slow.
+2. Loading `all-MiniLM-L6-v2` into memory — ~3 s.
+3. Building the FAISS index from scratch — ~5 s on cold-start because
+   the build script had not finished in time.
+4. Spawning the MCP subprocess and waiting up to 15 s for `/health`.
+5. Initialising the OpenAI client with the network round-trip.
+
+That whole chain was a single `await` inside the lifespan, so the
+server never reached `listen()` until everything finished. Render's
+health probe gave up first.
+
+**Fix (commit `17a4522`).** Split startup into two phases:
+
+1. **Lifespan** now only does the cheap, must-happen-before-listen()
+   work:
+   - print env-var status,
+   - create the `asyncio.Event` / `asyncio.Lock` primitives,
+   - spawn a fire-and-forget `asyncio.Task` named `heavy-init-prewarm`
+     that runs the heavy init in a worker thread via `asyncio.to_thread`.
+
+   `listen()` returns within a few hundred milliseconds so Render's
+   health probe is satisfied immediately.
+
+2. **First request** that actually needs the RAG / MCP / orchestrator
+   calls `ensure_initialized(timeout=120)`. That function:
+   - Lazily creates `_init_event` / `_init_lock` if the lifespan was
+     bypassed (TestClient, certain fixtures).
+   - Uses `asyncio.wait_for` with a 120-second ceiling so a stuck
+     initializer cannot hang the request forever.
+   - Uses double-checked locking so concurrent first-callers all
+     wait on the same event instead of racing to build the same
+     components five times.
+
+Two new endpoints made the split observable:
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /health` | Liveness — `200 {status, app_status, initialized}` once the worker is listening. **Does not** touch MCP / RAG. |
+| `GET /ready` | Readiness — `200 {status, initialized, mcp_connected, index_status, init_error}` so ops can see whether heavy init finished. |
+
+A second change shipped in the same commit: the embedder swapped from
+`sentence-transformers` to `fastembed` (Qdrant's ONNX runtime). The
+fastembed package is ~50 MB instead of ~990 MB and loads in 3-5 s
+instead of ~30 s, which is what makes the lazy-init math actually
+work on a 512 MB Render free instance. The public `Embedder` API is
+unchanged so the rest of the pipeline (vector store, retriever, CLI
+build script) does not know the difference.
+
+A third change shipped in the same commit: the embedder itself
+became **lazy**. `Embedder.__init__` no longer constructs the
+underlying `TextEmbedding`; the property `embedder.model` builds it
+on first call. Combined with the lifespan split, this means simply
+*importing* `src.api.main` (which happens during the uvicorn boot)
+does not pull in ONNX Runtime at all — only the first `/chat`
+request that actually needs embeddings pays that cost.
+
+A fourth change: `src/main.py` (local dev entry point) also moved
+from `uvicorn.run(...)` to `granian.Granian(target=app,
+interface="asgi", ...)` so local behaviour matches what Render runs
+in production. The Render `startCommand` in `render.yaml` was
+updated to
+`granian --interface asgi --host 0.0.0.0 --port $PORT --workers 1
+src.api.main:app` to match.
+
+**Measured outcome on Render free.**
+
+| Metric | Before lazy init | After lazy init |
+| --- | --- | --- |
+| First `/health` response | never (deploy marked failed) | ~1 s after container start |
+| Heavy init finishes | never (lifespan blocked) | ~5–8 s in background |
+| Time to first successful `/chat` (cold) | never | ~60 s end-to-end |
+| Time to first successful `/chat` (warm) | n/a | ~2.5 s |
+| Render deploy status | `failed` | `live` |
+
+The "before" column is the original symptom: Render marked every
+deploy as failed and the service was never reachable from outside
+the container. The "after" column is the production reality: the
+service is reachable in ~1 s for liveness and ~60 s for the first
+chat, and stays reachable for the lifetime of the container.
+
+**Lesson.** On free-tier hosts, `lifespan` is the wrong place to do
+expensive work. It blocks `listen()` and triggers the health-probe
+timeout. Move heavy init behind an `asyncio.Event` + a background
+task, and split liveness from readiness at the HTTP layer so the
+platform can tell the difference between "process is up" and "service
+is fully ready." Also: pick the smallest embedding runtime that
+meets your accuracy bar — a 990 MB dep tree is not free even when
+the model itself is. And make the model itself lazy so even
+*importing* your code does not pay the load cost.
+
+---
+
 ## Takeaways
 
-The most common theme across these 30 issues:
+The most common theme across these 31 issues:
 
 1. **CI environments are not your dev environment.** No `OPENAI_API_KEY`,
    PowerShell quirks, no cache, no model state. Build the entire

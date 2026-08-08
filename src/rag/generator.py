@@ -49,6 +49,22 @@ Your role is to:
         self.max_tokens = max_tokens
         api_key = api_key or os.getenv("OPENAI_API_KEY")
         base_url = base_url or os.getenv("OPENAI_BASE_URL")
+
+        # Diagnostic: surface the resolved LLM endpoint so config drift
+        # between local .env and the Render dashboard is visible at
+        # startup rather than surfacing as a confusing
+        # ``UnsupportedProtocol`` deep in the OpenAI SDK on first use.
+        effective_key_prefix = (api_key or "")[:7]
+        effective_base = base_url or "<unset - defaults to api.openai.com>"
+        print(
+            f"[generator] LLM config: model={self.model!r} "
+            f"base_url={effective_base!r} api_key_prefix={effective_key_prefix!r}"
+        )
+        if not api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY is not set; generator cannot reach the LLM."
+            )
+
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=60.0)
 
     def generate(

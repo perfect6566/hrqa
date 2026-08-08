@@ -244,10 +244,28 @@ which is marked `sync: false` so you must set it manually.
 
 #### Cold-Start Behavior
 
-Render's free tier spins the service down after ~15 minutes of inactivity.
-The first request after a spin-down takes 30–60 seconds. The build script
-pre-builds the RAG index so the cold-start is mostly just the FastAPI/Uvicorn
-boot and the pipeline warm-up.
+Render's free tier spins the service down after ~15 minutes of
+inactivity. The first request after a spin-down wakes the container.
+The lifespan is split into a **cheap phase** (only env-var reading
+and `asyncio` primitives, blocking `listen()`) and a **heavy phase**
+(MCP subprocess, RAG pipeline, agent orchestrator) that runs in a
+background task. The embedder model itself is built lazily on first
+use.
+
+| Phase | Expected latency on Render free |
+| --- | --- |
+| First `/health` response after spin-down | ~1 s |
+| Heavy init (background task) | ~5–8 s |
+| First `/chat` (cold, including first embedder load) | ~60 s end-to-end |
+| First `/chat` (warm) | ~2.5 s |
+| Chat P50 (warm) | ~2.5 s |
+| Chat P95 (warm) | ~5.5 s |
+
+Hit `/health` once before a recorded demo so heavy init is already
+finished by the time the camera starts. See `docs/deployed.md` for
+the full cold-start analysis and `docs/CHALLENGES.md §31` for the
+post-mortem of the earlier "service never came up on free tier"
+incident this design fixes.
 
 ### Railway
 

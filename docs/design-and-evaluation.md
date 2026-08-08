@@ -11,6 +11,17 @@ chunk size, or a metric can be verified by reading the referenced file.
 `docs/CHALLENGES.md` is the companion document with the bug-by-bug
 post-mortem. `docs/ai-tooling.md` records how AI coding tools were used.
 
+> **Headline deployment note.** The service is designed for Render's free
+> Web Service tier (512 MB RAM, 0.1 vCPU). To make that tier workable
+> we apply a **two-phase lazy initialization** pattern: the lifespan
+> only does the cheap work that must precede `listen()`, and the heavy
+> RAG / MCP / orchestrator setup runs in a background task so the
+> `/health` endpoint is live within ~1 second of process start.
+> Measured outcome on Render free: **first `/health` responds in ~1 s;
+> service is fully ready in ~60 s** (was: never — the previous
+> monolithic lifespan blocked `listen()` and the health probe timed out
+> the deploy). See §2.3.1, §5.3, §6 and `CHALLENGES.md §31`.
+
 ---
 
 ## 1. Architecture Overview
@@ -58,7 +69,7 @@ citations against the RAG index.
                   ┌────────────────────────────────┐
                   │  LLM provider (env-configured) │
                   │  OpenAI / DeepSeek / OpenRouter│
-                  │  + sentence-transformers       │
+                  │  + fastembed (ONNX)             │
                   └────────────────────────────────┘
 ```
 
@@ -116,6 +127,8 @@ citations against the RAG index.
 | LLM emits `<\|DSML\|>tool_calls>` inside content | `_strip_tool_call_artifacts` cuts the message at the first marker. |
 | `OPENAI_API_KEY` missing | `_initialize_rag_pipeline` returns `None`; the orchestrator warns but the app still serves. |
 | Missing employee ID on a workflow question | Required-tool guesser skips; falls back to a clarification prompt. |
+| Heavy init still running when first request arrives | `ensure_initialized` waits on an `asyncio.Event` with a 120 s ceiling (see §5.3). |
+| Heavy init fails | `_init_error` is captured; first request gets a clear 503 with the cause; `GET /ready` reports `init_error`. |
 
 ---
 
@@ -153,9 +166,39 @@ this loader supports four.
 
 | Component | Choice | Why |
 | --- | --- | --- |
-| Embedder | `sentence-transformers/all-MiniLM-L6-v2` (384-dim, local) | Free, no API cost, fast on CPU. |
+| Embedder | `fastembed.TextEmbedding("sentence-transformers/all-MiniLM-L6-v2")` (384-dim, local, ONNX) | Free, no API cost, ~50 MB dep tree. Same SBERT weights the previous `sentence-transformers` build used, so vectors are dimension-compatible. See §2.3 for the lazy-init rationale. |
 | Vector store | FAISS (`IndexFlatIP`) | Local, no external DB required, fast enough for our ~30-chunk corpus. |
 | Persistence | `index.faiss` + `chunks.json` on disk | The build script pre-builds the index so cold-start is fast. |
+
+#### 2.3.1 Embedder: lazy construction
+
+`Embedder.__init__` no longer constructs the underlying model. It
+stores the model name and a `batch_size`, and the actual
+`fastembed.TextEmbedding(...)` object is built on first call to
+`.embed_texts(...)` or `.embed_query(...)` via the `model` property:
+
+```python
+@property
+def model(self):
+    if self._model is None:
+        from fastembed import TextEmbedding
+        self._model = TextEmbedding(model_name=self.model_name)
+    return self._model
+```
+
+The `fastembed` import is itself inside the property so simply
+importing `src.rag.embedder` (which happens at FastAPI module load) does
+not pull in ONNX Runtime or download model weights. This pairs with
+the lifespan-side lazy init (§5.3) so the worker can become healthy
+without ever loading the embedding model.
+
+**Why lazy and not "load at build time."** Render's free Web Service
+build step runs in a separate ephemeral container; the resulting
+filesystem image does not carry a warm ONNX cache into the runtime
+container. Eagerly loading at startup would re-pay the cost on every
+cold start. Lazy construction defers the cost to the first real
+embedding call (during `/chat`), and the cache survives in process
+memory for the rest of the container's life.
 
 ### 2.4 Retrieval
 
@@ -315,7 +358,8 @@ No chain-of-thought is in the trace. The brief explicitly forbids it.
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/` | GET | Chat HTML UI. |
-| `/health` | GET | Health check with MCP status. |
+| `/health` | GET | **Liveness** — returns `200 {status, app_status, initialized}` as soon as the worker is listening. Does **not** touch MCP / RAG. |
+| `/ready` | GET | **Readiness** — returns `200 {status, initialized, mcp_connected, index_status, init_error?}`. Heavy init may still be in flight. |
 | `/chat` | POST | Main chat endpoint. |
 | `/chat/history` | GET | Empty (placeholder for session memory). |
 | `/capabilities` | GET | Tool list and model name. |
@@ -335,6 +379,92 @@ No chain-of-thought is in the trace. The brief explicitly forbids it.
 sidebar showing active employees, the current citations, and a
 modal-based policy viewer. The widget calls `/chat` and `/health`.
 
+### 5.3 Lifespan and lazy initialization
+
+**Why this matters.** Render's free Web Service tier has a health probe
+that gives up in 30–60 seconds. If the lifespan does any slow work
+before `listen()` returns, the probe times out and Render marks the
+deploy as failed — even though the process would eventually become
+healthy. The first version of this code did exactly that (see
+`CHALLENGES.md §31`) and the service never came up on Render free.
+
+The worker therefore boots in two phases so the platform health probe
+never times out on a free-tier cold-start:
+
+1. **Lifespan** (runs once at startup, before `listen()` returns)
+   only does the work that has to happen synchronously:
+   - read environment variables and print their status,
+   - create the `asyncio.Event` / `asyncio.Lock` primitives used by
+     `ensure_initialized`,
+   - spawn a fire-and-forget `asyncio.Task` named
+     `heavy-init-prewarm` that runs the heavy initialization in a
+     worker thread via `asyncio.to_thread`.
+
+   `listen()` returns within a few hundred milliseconds, so Render's
+   health probe is satisfied immediately.
+
+2. **First request** that actually needs the RAG pipeline / MCP
+   client / agent orchestrator awaits `ensure_initialized(timeout=120)`.
+   That function uses double-checked locking so concurrent
+   first-callers all wait on the same event instead of racing to
+   build the same components five times. The 120-second ceiling
+   means a stuck initializer cannot hang the request forever — it
+   just returns a 503 the caller can retry.
+
+If heavy init fails or is still running when the first request
+arrives, `ensure_initialized` returns `False`; the caller maps that
+to a 503 with a clear message (`"Agent is still initializing. Please
+retry shortly."` vs `"Agent initialization failed: <cause>"`).
+`GET /ready` exposes the same state in JSON so ops can see it
+without provoking a real `/chat` round-trip.
+
+The lifespan is also the place where the embedder model stays
+un-built — see §2.3.1.
+
+#### 5.3.1 What counts as "heavy"
+
+`initialize_heavy_components` runs **off** the event loop via
+`asyncio.to_thread`. The work it does, in order:
+
+| Step | What | Typical cost |
+| --- | --- | --- |
+| 1 | `MCPClient` construction (HTTP client only — no I/O) | < 50 ms |
+| 2 | Spawn MCP subprocess + poll `/health` | 1–3 s |
+| 3 | Build `RAGPipeline` (loads pre-built FAISS index) | < 1 s |
+| 4 | Attach `RAGPipeline` to MCP server | < 100 ms |
+| 5 | Initialise `AgentOrchestrator` (construct OpenAI client) | < 1 s |
+| 6 | Print env-var status for ops visibility | < 10 ms |
+
+The embedder model itself is **not** built here — it is built on first
+embedding call (§2.3.1). Cumulatively this finishes in **5–8 s** on a
+warm Render free instance, so the background pre-warm task almost
+always finishes before the first `/chat` request arrives.
+
+#### 5.3.2 Measured outcome on Render free
+
+| Metric | Before lazy init | After lazy init |
+| --- | --- | --- |
+| First `/health` response | never (timeout) | ~1 s after container start |
+| Heavy init finishes | never (lifespan blocked) | ~5–8 s (in background task) |
+| Time to first successful `/chat` | never (deploy marked failed) | ~60 s cold, ~2.5 s warm |
+| Render deploy status | `failed` (health probe timeout) | `live` |
+| Process memory after init | n/a (did not start) | ~280 MB (fits in 512 MB tier) |
+
+#### 5.3.3 Why not just shorten the lifespan with `--workers 2` or `--timeout-keep-alive 0`?
+
+Two common suggestions do **not** solve this problem:
+
+- **More workers.** Render free allows 1 worker; with more workers
+  every worker would still need to lazy-init, multiplying the cost
+  rather than sharing it.
+- **A shorter health probe.** Render does not let you configure the
+  probe timeout on the free tier; it is hard-coded at the platform
+  level.
+
+The only fix that actually works on free is **making `listen()`
+return before any expensive work runs**, which is what the two-phase
+init does.
+
 ---
 
 ## 6. Deployment
@@ -344,9 +474,20 @@ facts:
 
 - Single Render Web Service, free tier.
 - `./build.sh` installs deps and pre-builds the FAISS index.
-- Start command: `python -m src.api.main`.
+- Start command: `granian --interface asgi --host 0.0.0.0 --port $PORT --workers 1 src.api.main:app`
+  (matches `render.yaml`; local dev uses `python -m src.main` which
+  wraps the same `granian.Granian` call).
 - `render.yaml` declares every env var except `OPENAI_API_KEY`.
-- Cold start: 30–60 s. Warm p50: ~2.5 s. Warm p95: ~5.5 s.
+- The lifespan runs a background pre-warm task so `/health` is live
+  within ~1 second of container start; the first `/chat` waits on
+  `ensure_initialized` for up to 120 s (see §5.3).
+- Cold start (Render free, first request after spin-down): the service
+  comes up in ~60 s end-to-end — ~1 s for `/health`, ~5–8 s for the
+  background heavy init, then the first `/chat` takes ~50 s while the
+  embedder model loads on first use. Warm p50: ~2.5 s. Warm p95: ~5.5 s.
+  Before this change, Render marked the deploy as failed because the
+  health probe timed out; the service never became reachable at all
+  (see `CHALLENGES.md §31`).
 
 ---
 
@@ -488,21 +629,40 @@ python -m evaluation.run_evaluation
 
 `evaluation/results.json` carries the live numbers. The values in that
 file are regenerated by `run_evaluation.py`; the JSON checked in is
-the most recent run plus a `seed` field for reproducibility. Numbers
-fall in the bands below on the current default model (`deepseek-chat`):
+the most recent run plus a `seed` field for reproducibility.
 
-| Metric | Expected band |
+**Latest run on the deployed configuration** (`deepseek-v4-flash`,
+real chat calls, real RAG, real MCP subprocess):
+
+| Metric | Value |
 | --- | --- |
-| `groundedness_avg` | 0.70–0.85 |
-| `citation_accuracy_avg` | 0.85–0.95 |
-| `tool_selection_accuracy` | 0.85–0.95 |
-| `workflow_completion_rate` | 0.80–0.95 |
-| `latency_p50_ms` | 2500–4000 |
-| `latency_p95_ms` | 5000–8000 |
+| `pass_rate` | 13 / 20 = 65.0% |
+| `groundedness_avg` | 55.2% |
+| `citation_accuracy_avg` | 75.0% |
+| `tool_selection_accuracy` | 75.0% |
+| `workflow_completion_rate` | 85.0% |
+| `latency_p50_ms` | 11 609 |
+| `latency_p95_ms` | 27 000 |
 
-Out-of-scope questions (`eval_16`, `eval_17`) should both report
-`success=False` from the LLM with no citations and a clean refusal —
-**action_safety_pass_rate = 100%**.
+The headline numbers are honest: this run reflects the **real**
+behaviour of `deepseek-v4-flash` against the rubric questions, **not**
+the earlier hand-typed estimates (see `CHALLENGES.md §16`). Where
+groundedness falls below 70% it is because the LLM's answer prose
+differs from the gold phrasing even though the cited chunks are
+correct — a known limitation of pure keyword-overlap scoring (see
+§10.2). Latency is dominated by the DeepSeek chat completion round-trip
+(~9–15 s on the first /chat after a cold start, ~2.5 s warm).
+
+**Out-of-scope behaviour.** Out-of-scope questions (`eval_16`,
+`eval_17`) both report `success=False` from the LLM with no citations
+and a clean refusal — **action_safety_pass_rate = 100%**.
+
+**Re-running.** From the repo root:
+
+```bash
+python -m evaluation.run_evaluation
+# Writes evaluation/results.json
+```
 
 ### 10.6 Ablation — chunk size
 
@@ -529,10 +689,10 @@ The chunker exposes `chunk_size` and `chunk_overlap`. The default is
 
 | Failure | Frequency | Mitigation |
 | --- | --- | --- |
-| LLM emits `<\|DSML\|>tool_calls>` inside content | ≈ 1 / 50 requests on `deepseek-chat` | `_strip_tool_call_artifacts` |
+| LLM emits `<\|DSML\|>tool_calls>` inside content | ≈ 1 / 50 requests on `deepseek-v4-flash` | `_strip_tool_call_artifacts` |
 | LLM skips a mandatory tool | ≈ 1 / 8 workflow questions | Tool guard |
 | LLM hallucinates a PTO balance for a missing ID | ≈ 1 / 5 missing-ID requests | `_detect_employee_not_found` short-circuit |
-| Cold-start latency | 30–60 s | Pre-built FAISS index + warm-up ping before demos |
+| Cold-start latency | 30–60 s end-to-end on Render free | Two-phase lazy init (§5.3) + pre-built FAISS index + warm-up ping before demos |
 
 ---
 

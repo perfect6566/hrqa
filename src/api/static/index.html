@@ -828,6 +828,21 @@
         let employeeMap = {};
 
         // ---- Status indicator (real health probe) ----
+        // The chat UI status reflects MCP reachability (the user-facing
+        // "what works right now" answer), not just liveness. We probe
+        // both endpoints so the indicator degrades cleanly across the
+        // cold-start window:
+        //
+        //   - `/health` is the liveness probe (200 once the worker is
+        //     listening). It does NOT touch MCP, so it stays green even
+        //     while heavy init is running in the background.
+        //   - `/mcp/status` is the MCP reachability probe. It returns
+        //     `connected: true` + `tools_count: 8` once the MCP
+        //     subprocess is up.
+        //
+        // The old version of this code read `mcp_connected` from
+        // `/health` and got undefined, which fell through to the
+        // "Partially ready" label. See docs/CHALLENGES.md §31.
         function setStatus(text, ok = true) {
             statusTextEl.textContent = text;
             statusEl.classList.toggle('error', !ok);
@@ -835,19 +850,32 @@
 
         async function probeHealth() {
             try {
-                const r = await fetch('/health');
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                const h = await r.json();
-                if (h.status === 'healthy' && h.mcp_connected) {
-                    const tools = h.tools_count ? ` · ${h.tools_count} tools` : '';
-                    setStatus(`MCP connected${tools}`, true);
-                } else if (h.status === 'healthy') {
-                    setStatus('Partially ready', true);
-                } else {
+                const hr = await fetch('/health');
+                if (!hr.ok) throw new Error('HTTP ' + hr.status);
+                const h = await hr.json();
+                if (h.status !== 'healthy') {
                     setStatus('Status error', false);
+                    return;
                 }
             } catch (e) {
                 setStatus('Connection error', false);
+                return;
+            }
+
+            try {
+                const mr = await fetch('/mcp/status');
+                const m = await mr.json();
+                if (m.connected) {
+                    const tools = m.tools_count ? ` · ${m.tools_count} tools` : '';
+                    setStatus(`MCP connected${tools}`, true);
+                } else if (m.error) {
+                    setStatus(`Initializing… (${m.error})`, true);
+                } else {
+                    setStatus('Initializing…', true);
+                }
+            } catch (e) {
+                // MCP not yet bound — heavy init still running.
+                setStatus('Initializing…', true);
             }
         }
 
